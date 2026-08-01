@@ -1,0 +1,14 @@
+# Local LoRA training for Clover Image Tiny.
+# Pinned to the versions the published adapters were trained with.
+accelerate==1.14.0
+diffusers==0.39.0
+transformers==4.57.6
+datasets==4.8.5
+huggingface-hub==0.36.2
+safetensors==0.8.0
+peft==0.17.1
+pillow==12.3.0
+tensorboard==2.20.0
+# torch is intentionally not pinned here: install the build that matches your
+# platform (CUDA / ROCm / Apple MPS / CPU) from https://pytorch.org/get-started.
+torch>=2.7,<2.8

@@ -1,0 +1,23 @@
+# Training artifacts
+outputs/
+.trainers/
+*.safetensors
+checkpoint-*/
+logs/
+
+# CoreML conversion artifacts
+coreml/.coreml-converter/
+coreml/.venv-coreml/
+coreml-models/
+*.mlpackage/
+*.mlmodelc/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# OS
+.DS_Store

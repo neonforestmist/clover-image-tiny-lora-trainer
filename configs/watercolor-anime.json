@@ -1,0 +1,20 @@
+{
+  "style": "watercolor-anime",
+  "dataset": "neonforestmist/GPT_Watercolor_Anime_Style_Images",
+  "trigger": "watercolor anime",
+  "output_dir": "outputs/watercolor-anime-lora",
+  "hub_model_id": "neonforestmist/clover-image-tiny-watercolor-anime-lora",
+  "resolution": 512,
+  "rank": 16,
+  "max_train_steps": 1200,
+  "learning_rate": 0.0001,
+  "lr_scheduler": "cosine",
+  "warmup_steps": 120,
+  "snr_gamma": 5.0,
+  "train_batch_size": 1,
+  "gradient_accumulation_steps": 1,
+  "mixed_precision": "fp16",
+  "checkpointing_steps": 300,
+  "seed": 20260730,
+  "validation_prompt": "watercolor anime, a small blue cat resting beside a lily pond"
+}
