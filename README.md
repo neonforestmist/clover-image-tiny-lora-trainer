@@ -19,6 +19,15 @@ adapters:
 All three are rank-16 U-Net LoRAs trained with the official Diffusers 0.39.0
 text-to-image LoRA trainer. The text encoder and VAE stay frozen.
 
+## Examples
+
+The same subject rendered by each trained adapter (validation outputs from the
+published LoRAs):
+
+| Monet — `Monet Style` | Pointillism — `pointillism painting` | Watercolor Anime — `watercolor anime` |
+|:---:|:---:|:---:|
+| ![Monet example](assets/monet.png) | ![Pointillism example](assets/pointillism.png) | ![Watercolor Anime example](assets/watercolor-anime.png) |
+
 ```text
 clover-lora-training/
 ├── train_lora.py        # local training (wraps the pinned Diffusers trainer)
