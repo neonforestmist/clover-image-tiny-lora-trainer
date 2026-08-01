@@ -2,7 +2,10 @@
 
 Train style **LoRAs** for
 [`neonforestmist/Clover-Image-Tiny`](https://huggingface.co/neonforestmist/Clover-Image-Tiny)
-locally, then convert them to **Core ML** for Apple platforms.
+locally. The adapters are standard Diffusers/PEFT LoRAs — use them anywhere
+Diffusers runs (CUDA, Apple MPS, CPU, a Gradio Space, your own app). Exporting
+to **Core ML** is an *optional* extra path for shipping a style on Apple
+platforms, not a requirement.
 
 This repo is the reproducible source for the three published Clover style
 adapters:
@@ -153,11 +156,16 @@ validation images to that repo.
 
 ---
 
-## 4. Convert to Core ML
+## 4. Convert to Core ML (optional)
+
+You do **not** need this step to use a trained adapter — it runs directly in
+Diffusers (see the snippet above) on CUDA, Apple MPS, or CPU, and in the
+[Gradio demo Space](https://huggingface.co/spaces/neonforestmist/Clover-Image-Tiny-Demo).
+Core ML is only for shipping a style **on Apple platforms** (iOS/macOS apps).
 
 Apple's Stable Diffusion Core ML runtime cannot load PEFT/Diffusers LoRA
-adapters at runtime, so each Apple-platform style is a copy of the pipeline
-with **one adapter fused in**, converted to its own Core ML bundle.
+adapters at runtime, so a Core ML style is a copy of the pipeline with **one
+adapter fused in**, converted to its own Core ML bundle.
 
 ```bash
 # 1. Fuse the adapter into a conversion-ready pipeline (proves the U-Net changed).

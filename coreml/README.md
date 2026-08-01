@@ -1,10 +1,15 @@
-# Core ML conversion
+# Core ML conversion (optional)
+
+This step is **optional**. A trained adapter already runs directly in Diffusers
+on CUDA, Apple MPS, or CPU, and in the Gradio demo Space — no conversion
+needed. Core ML is only for shipping a style inside a native **Apple-platform**
+app (iOS/macOS).
 
 Apple's Stable Diffusion Core ML runtime does **not** load Diffusers/PEFT LoRA
-adapters at runtime. To ship a style on Apple platforms you bake one adapter
-into a copy of the pipeline and convert that fused U-Net to its own Core ML
-bundle. The picker in an app then chooses the base bundle or one of the fused
-style bundles.
+adapters at runtime. To ship a style that way you bake one adapter into a copy
+of the pipeline and convert that fused U-Net to its own Core ML bundle. The
+picker in an app then chooses the base bundle or one of the fused style
+bundles.
 
 This directory has two conversion paths.
 
