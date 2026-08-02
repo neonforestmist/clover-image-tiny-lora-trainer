@@ -1,247 +1,184 @@
-# 🍀 Clover LoRA Training
+# Clover LoRA Training
 
-Train style **LoRAs** for
+Train compact visual styles for
 [`neonforestmist/Clover-Image-Tiny`](https://huggingface.co/neonforestmist/Clover-Image-Tiny)
-locally. The adapters are standard Diffusers/PEFT LoRAs — use them anywhere
-Diffusers runs (CUDA, Apple MPS, CPU, a Gradio Space, your own app). 🎨
+from a browser-based local control room or the command line.
 
-> 🍏 **Shipping on an Apple platform (iOS / macOS)?**
-> Core ML follows a **separate procedure** from normal training — skip ahead to
-> [**§4 · Core ML conversion**](#coreml) or the standalone
-> [`coreml/README.md`](coreml/README.md). It's entirely optional; you don't need
-> it to use a LoRA.
+The base model stays shared. A finished rank-16 style is a small
+`safetensors` file; the iOS release loads that file into the stateful Core ML
+U-Net at runtime instead of downloading another 648 MB U-Net.
 
-### 🧭 Jump to
+## Published styles
 
-| 🖼️ [Examples](#examples) | 🗂️ [Repo layout](#layout) | 🧩 [Dataset format](#pairs) | ⚙️ [Set up](#setup) | 🚀 [Train](#train) | 🍏 [Core ML](#coreml) |
-|---|---|---|---|---|---|
-
-This repo is the reproducible source for the three published Clover style
-adapters:
-
-| Style | Dataset | Trigger phrase | Steps | Adapter |
+| Style | Dataset | Trigger phrase | Steps | Core ML style file |
 |---|---|---|---:|---|
-| 🎨 Monet | [`GPT_Monet_Style_Images`](https://huggingface.co/datasets/neonforestmist/GPT_Monet_Style_Images) | `Monet Style` | 1,000 | [`clover-image-tiny-monet-lora`](https://huggingface.co/neonforestmist/clover-image-tiny-monet-lora) |
-| 🔴 Pointillism | [`GPT_Pointillism_Style_Images`](https://huggingface.co/datasets/neonforestmist/GPT_Pointillism_Style_Images) | `pointillism painting` | 700 | [`clover-image-tiny-pointillism-lora`](https://huggingface.co/neonforestmist/clover-image-tiny-pointillism-lora) |
-| 🌸 Watercolor Anime | [`GPT_Watercolor_Anime_Style_Images`](https://huggingface.co/datasets/neonforestmist/GPT_Watercolor_Anime_Style_Images) | `watercolor anime` | 1,200 | [`clover-image-tiny-watercolor-anime-lora`](https://huggingface.co/neonforestmist/clover-image-tiny-watercolor-anime-lora) |
+| Monet | [`GPT_Monet_Style_Images`](https://huggingface.co/datasets/neonforestmist/GPT_Monet_Style_Images) | `Monet Style` | 1,000 | [`Monet.safetensors`](https://huggingface.co/neonforestmist/clover-image-tiny-monet-lora-coreml) |
+| Pointillism | [`GPT_Pointillism_Style_Images`](https://huggingface.co/datasets/neonforestmist/GPT_Pointillism_Style_Images) | `pointillism painting` | 700 | [`Pointillism.safetensors`](https://huggingface.co/neonforestmist/clover-image-tiny-pointillism-lora-coreml) |
+| Watercolor Anime | [`GPT_Watercolor_Anime_Style_Images`](https://huggingface.co/datasets/neonforestmist/GPT_Watercolor_Anime_Style_Images) | `watercolor anime` | 1,200 | [`Watercolor-Anime.safetensors`](https://huggingface.co/neonforestmist/clover-image-tiny-watercolor-anime-lora-coreml) |
 
-All three are rank-16 U-Net LoRAs trained with the official Diffusers 0.39.0
-text-to-image LoRA trainer. The text encoder and VAE stay frozen. ❄️
+All three use the official Diffusers 0.39.0 text-to-image LoRA trainer. The
+U-Net attention layers are trained at rank 16; the text encoder and VAE stay
+frozen.
 
-<a id="examples"></a>
-## 🖼️ Examples
+## Examples
 
-The same subject rendered by each trained adapter (validation outputs from the
-published LoRAs):
-
-| 🎨 Monet — `Monet Style` | 🔴 Pointillism — `pointillism painting` | 🌸 Watercolor Anime — `watercolor anime` |
+| Monet | Pointillism | Watercolor Anime |
 |:---:|:---:|:---:|
 | ![Monet example](assets/monet.png) | ![Pointillism example](assets/pointillism.png) | ![Watercolor Anime example](assets/watercolor-anime.png) |
 
-<a id="layout"></a>
-## 🗂️ Repo layout
+## Setup
 
-There are **two procedures** in this repo — normal LoRA training (🚀, any
-platform) and the optional Core ML export (🍏, Apple only). They live in
-separate places:
+Use Python 3.11 or 3.12. Install the PyTorch build for your CUDA, ROCm, Apple
+Silicon, or CPU environment first, then install the remaining dependencies.
 
-```text
-clover-lora-training/
-│
-├── 🚀 train_lora.py        # local training — wraps the pinned Diffusers trainer
-├── 🧪 prepare_dataset.py   # validate an image/caption dataset before training
-├── 📄 requirements.txt     # pinned deps (install torch for your platform first)
-│
-├── ⚙️  configs/            # one JSON per style — dataset, trigger, steps, seed
-│   ├── monet.json
-│   ├── pointillism.json
-│   └── watercolor-anime.json
-│
-├── 📁 data/                # what your training data should look like
-│   ├── README.md           #   → the pair format, spelled out
-│   └── example-monet/      #   → 3 real image/caption pairs you can train on
-│
-└── 🍏 coreml/              # SEPARATE procedure: fuse a LoRA → Core ML (Apple only)
-    └── README.md           #   → full Core ML walkthrough lives here
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-Your **dataset** directory (yours or the included example) looks like this — an
-`images/` folder next to a `metadata.jsonl` that pairs each image with a
-caption:
+Log in only when the dataset is private or the result should be pushed:
+
+```bash
+hf auth login
+```
+
+A CUDA GPU with at least 8 GB of memory is recommended. Apple Silicon and CPU
+are useful for the five-step smoke test but are much slower for a full run.
+
+## Local trainer GUI
+
+Start the control room:
+
+```bash
+python trainer_gui.py
+```
+
+Open `http://127.0.0.1:7860`. The GUI lets you:
+
+- load any included style preset and edit its dataset, trigger, step count,
+  rank, learning rate, batch settings, seed, and output location;
+- stream a preview of a Hub dataset or inspect a local imagefolder;
+- inspect the exact `accelerate` command before starting;
+- run a safe five-step smoke test or full training;
+- follow step progress, logs, and generated validation samples;
+- stop the local training process.
+
+The GUI listens on localhost by default. Pass `--share` only if you
+intentionally want Gradio to create a temporary public link.
+
+## Command-line training
+
+The CLI and GUI use the same `train_lora.py` wrapper and style configs.
+
+```bash
+# Show the exact command without downloading or training.
+python train_lora.py configs/monet.json --dry-run
+
+# Five steps on four samples; no Hub push.
+python train_lora.py configs/monet.json --smoke
+
+# Full run. The LoRA is written under outputs/.
+python train_lora.py configs/monet.json
+
+# Full run followed by a Hub upload.
+python train_lora.py configs/monet.json --push-to-hub
+```
+
+Use `configs/pointillism.json` or `configs/watercolor-anime.json` for the other
+published styles.
+
+## Dataset format
+
+A local dataset is a Diffusers imagefolder: an `images/` directory beside a
+`metadata.jsonl` file. Each line pairs one image with one caption.
 
 ```text
 data/example-monet/
-├── 🖼️  images/
+├── images/
 │   ├── gpt_monet_0001.png
 │   ├── gpt_monet_0002.png
 │   └── gpt_monet_0003.png
-└── 📝 metadata.jsonl        # one {"file_name": ..., "text": ...} per line
+└── metadata.jsonl
 ```
-
-<a id="pairs"></a>
-## 🧩 1 · What a training pair looks like
-
-A dataset is a Diffusers **imagefolder**: an `images/` folder plus a
-`metadata.jsonl` file. Each line pairs one image with one caption.
 
 ```json
-{"file_name": "images/gpt_monet_0001.png", "text": "Monet Style, a bakery interior with loaves of bread, pastries, and warm light, charming impressionist street shop atmosphere"}
+{"file_name": "images/gpt_monet_0001.png", "text": "Monet Style, a bakery interior with warm light"}
 ```
 
-- 🏷️ **Every caption starts with the same trigger phrase** (`Monet Style`). That
-  is the phrase you type at inference to switch the style on.
-- ✍️ After the trigger, describe the **subject** and a few **style/light/mood**
-  cues in natural language.
-- 🖼️ Images are square, clean, and consistent in style — 512×512 or larger (they
-  are resized to 512 during training).
-- 🔢 Aim for **50–150 pairs** per style; style consistency matters more than count.
+Start each caption with the style's consistent trigger phrase, describe the
+subject after it, and use clean square images at least 512×512. A focused set
+of 50–150 consistent pairs is a useful starting point.
 
-Three real pairs are included under [`data/example-monet/`](data/example-monet)
-so you can see the exact format. Full details and more caption examples are in
-[`data/README.md`](data/README.md).
-
-Validate any dataset before you spend GPU time on it: ✅
+Validate a local dataset before training:
 
 ```bash
 python prepare_dataset.py data/example-monet --trigger "Monet Style"
 ```
 
-It checks that every image exists, opens, and is large enough, that every
-caption is non-empty, and (optionally) that every caption starts with the
-trigger — then exits non-zero if anything is wrong.
+To use local data, copy a config and set its `dataset` field to the imagefolder
+path. `train_lora.py` automatically switches from `--dataset_name` to
+`--train_data_dir`.
 
-<a id="setup"></a>
-## ⚙️ 2 · Set up
+## Use a trained style in Diffusers
 
-```bash
-python -m venv .venv && source .venv/bin/activate
-
-# Install the PyTorch build for YOUR platform first (CUDA / ROCm / Apple MPS /
-# CPU) from https://pytorch.org/get-started/locally/ — then:
-pip install -r requirements.txt
-
-# Log in only if you will train against a private dataset or push to the Hub.
-hf auth login
-```
-
-💻 A CUDA GPU with ≥8 GB is recommended. Apple Silicon (MPS) and CPU work but are
-slow; use `--smoke` there to verify the pipeline end to end.
-
-<a id="train"></a>
-## 🚀 3 · Train locally
-
-`train_lora.py` reads a style config, downloads the pinned official trainer
-once into `.trainers/`, and launches it with `accelerate`.
-
-```bash
-# 👀 See the exact command without running anything.
-python train_lora.py configs/monet.json --dry-run
-
-# 🧪 Smoke test: 5 steps on 4 images, no Hub push. Proves your setup works.
-python train_lora.py configs/monet.json --smoke
-
-# 🏁 Full local run. Adapter weights land in outputs/monet-lora/.
-python train_lora.py configs/monet.json
-```
-
-Swap the config for `configs/pointillism.json` or
-`configs/watercolor-anime.json` to train the other styles. Each config pins the
-dataset, trigger, step count, rank, learning rate, and seed used for the
-published adapter.
-
-### 📂 Train on your own local dataset
-
-Point a config's `"dataset"` at a local imagefolder path instead of a Hub id
-and `train_lora.py` switches to `--train_data_dir` automatically:
-
-```jsonc
-{
-  "style": "my-style",
-  "dataset": "data/example-monet",
-  "trigger": "Monet Style",
-  "validation_prompt": "Monet Style, a quiet lily pond",
-  "max_train_steps": 800,
-  "rank": 16
-}
-```
-
-```bash
-python train_lora.py configs/my-style.json
-```
-
-### 🎉 The trained adapter
-
-Output is a single `pytorch_lora_weights.safetensors` (plus checkpoints and
-TensorBoard logs). Try it in a few lines:
+Training writes `pytorch_lora_weights.safetensors`. The technical term in
+Diffusers is a LoRA adapter, but published files should use the human-facing
+style name.
 
 ```python
 import torch
 from diffusers import DiffusionPipeline
 
 pipe = DiffusionPipeline.from_pretrained(
-    "neonforestmist/Clover-Image-Tiny", torch_dtype=torch.float16
+    "neonforestmist/Clover-Image-Tiny",
+    torch_dtype=torch.float16,
 ).to("cuda")  # or "mps"
 pipe.load_lora_weights("outputs/monet-lora")
 
 image = pipe(
-    "Monet Style, a small blue cat resting beside a lily pond",
-    num_inference_steps=20, guidance_scale=7.5,
+    "Monet Style, a small blue cat beside a lily pond",
+    num_inference_steps=20,
+    guidance_scale=7.5,
 ).images[0]
 image.save("sample.png")
 ```
 
-### ☁️ Push to the Hub (optional)
+## Core ML for iPhone
 
-```bash
-python train_lora.py configs/monet.json --push-to-hub
+The current iOS architecture uses one approximately 1.5 GB shared Core ML
+pipeline. Its U-Net contains 144 iOS 18 `MLState` buffers for LoRA weights.
+Selecting a style writes the named roughly 6.9 MB `safetensors` file into those
+buffers. It does not download or swap another full U-Net.
+
+The older fused conversion remains in this repository only as a legacy tool.
+For the current stateful export and validation workflow, see
+[`coreml/README.md`](coreml/README.md).
+
+## Repository layout
+
+```text
+clover-lora-training/
+├── trainer_gui.py         # local Gradio training control room
+├── train_lora.py          # reproducible Diffusers trainer wrapper
+├── prepare_dataset.py     # image/caption validation
+├── configs/               # published style presets
+├── data/                  # format guide and a small example
+└── coreml/                # stateful iOS 18 and legacy Core ML export tools
 ```
 
-This requires `hub_model_id` in the config and pushes the finished adapter and
-validation images to that repo.
+## Reproducibility
 
-<a id="coreml"></a>
-## 🍏 4 · Core ML conversion (Apple platforms, optional)
+Each config records its dataset, hyperparameters, trigger, and seed
+(`20260730`). `train_lora.py` pins the official trainer to Diffusers `v0.39.0`.
+Hardware and low-level kernels can still produce small numerical differences.
 
-> This is a **different procedure** from the training above, and you only need
-> it to ship a style inside a native **iOS / macOS** app. A trained adapter
-> already runs directly in Diffusers (see the snippet above) on CUDA, Apple MPS,
-> or CPU, and in the
-> [Gradio demo Space](https://huggingface.co/spaces/neonforestmist/Clover-Image-Tiny-Demo)
-> — no conversion needed.
+## Licensing
 
-Apple's Stable Diffusion Core ML runtime cannot load PEFT/Diffusers LoRA
-adapters at runtime, so a Core ML style is a copy of the pipeline with **one
-adapter fused in**, converted to its own Core ML bundle.
+- Code in this repository: Apache-2.0; see [`LICENSE`](LICENSE).
+- Trained style weights: derivatives of Clover Image Tiny under CreativeML
+  Open RAIL-M.
+- The linked GPT-generated style datasets: Apache-2.0.
 
-```bash
-# 1️⃣  Fuse the adapter into a conversion-ready pipeline (proves the U-Net changed).
-python coreml/fuse_lora.py \
-  --base /path/to/Clover-Image-Tiny \
-  --lora outputs/monet-lora \
-  --output /tmp/clover-monet-fused \
-  --prompt "Monet Style, a blue cat beside a lily pond"
-
-# 2️⃣  Convert the fused U-Net to Core ML (macOS + Xcode CLT + Python 3.11).
-CONVERT_UNET_ONLY=1 ./coreml/convert.sh /tmp/coreml-out/monet /tmp/clover-monet-fused
-```
-
-📖 The full walkthrough, requirements, and the advanced unfused-multifunction
-path live in **[`coreml/README.md`](coreml/README.md)**.
-
-## 🔁 Reproducibility
-
-Every config pins the dataset, hyperparameters, and a fixed seed (`20260730`),
-and `train_lora.py` pins the trainer to Diffusers `v0.39.0`. Given the same
-dataset revision and comparable hardware, a local run reproduces the published
-adapter. The base checkpoint revision each adapter was trained against is
-recorded on that adapter's Hub model card.
-
-## 📜 Licensing
-
-- 🧑‍💻 **Code** in this repo: Apache-2.0 (see [`LICENSE`](LICENSE)).
-- 🎨 **Trained adapters** are derivatives of Clover Image Tiny and inherit its
-  **CreativeML Open RAIL-M** model license.
-- 🗃️ The **GPT-generated style datasets** are Apache-2.0.
-
-⚠️ Generated content can inherit limitations and biases from the base checkpoint
+Generated content can inherit limitations and biases from the base checkpoint
 and training data. Review outputs before use.
