@@ -180,8 +180,12 @@ class CloverTrainerWindow(QMainWindow):
         form = QFormLayout()
         form.setVerticalSpacing(10)
         self.preset_combo = QComboBox()
-        self.preset_combo.addItems(list(core.CONFIGS))
-        self.preset_combo.currentTextChanged.connect(self._load_preset)
+        for name in core.CONFIGS:
+            title = name.replace("-", " ").title()
+            self.preset_combo.addItem(f"{title} (configs/{name}.json)", name)
+        self.preset_combo.currentIndexChanged.connect(
+            lambda _index: self._load_preset(str(self.preset_combo.currentData()))
+        )
         form.addRow("Recipe", self.preset_combo)
 
         self.dataset_edit = QLineEdit()

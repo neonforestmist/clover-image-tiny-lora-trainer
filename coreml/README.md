@@ -115,18 +115,8 @@ coreml/
 ├── convert_stateful_lora_unet.py   # inject and export MLState buffers
 ├── validate_stateful_lora.py       # base/style PyTorch ↔ Core ML parity
 ├── constraints.txt                 # pinned converter environment
-├── apple-no-mid-block.patch        # Clover converter compatibility
-├── convert.sh                      # legacy fused/chunked conversion
-├── fuse_lora.py                    # legacy style fusion
-└── convert_lora_unet.py            # legacy and validation helper
+└── apple-no-mid-block.patch        # Clover converter compatibility
 ```
-
-## Legacy fused conversion
-
-`convert.sh` and `fuse_lora.py` bake a style into its own Core ML U-Net. That
-path produced the old roughly 648 MB-per-style downloads and remains only for
-reproducibility. The current iOS catalog uses one shared stateful base and
-small named `.safetensors` styles.
 
 ## Licensing
 
