@@ -1,4 +1,4 @@
-# Clover LoRA Training
+# Clover Image Tiny LoRA Trainer
 
 Train compact visual styles for
 [`neonforestmist/Clover-Image-Tiny`](https://huggingface.co/neonforestmist/Clover-Image-Tiny)
