@@ -17,8 +17,12 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install lightweight GUI test dependencies
-        run: python -m pip install "gradio==6.22.0"
+        run: python -m pip install "PySide6-Essentials==6.11.1"
       - name: Compile Python sources
-        run: python -m py_compile trainer_gui.py train_lora.py prepare_dataset.py coreml/*.py
+        run: python -m py_compile trainer_gui.py trainer_core.py train_lora.py prepare_dataset.py coreml/*.py
+      - name: Smoke test native desktop window
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -c "from PySide6.QtWidgets import QApplication; from trainer_gui import CloverTrainerWindow; app = QApplication([]); window = CloverTrainerWindow(); assert window.tabs.count() == 2"
       - name: Run studio tests
         run: python -m unittest discover -s tests -v

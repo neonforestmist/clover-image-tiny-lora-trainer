@@ -1,24 +1,22 @@
 # Clover Image Tiny LoRA Trainer
 
-[![Quality checks](https://github.com/neonforestmist/clover-image-tiny-lora-trainer/actions/workflows/quality.yml/badge.svg)](https://github.com/neonforestmist/clover-image-tiny-lora-trainer/actions/workflows/quality.yml)
-[![Python 3.11–3.12](https://img.shields.io/badge/Python-3.11–3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Clover model](https://img.shields.io/badge/Model-Clover_Image_Tiny-FFD21E?logo=huggingface&logoColor=111)](https://huggingface.co/neonforestmist/Clover-Image-Tiny)
-[![iPhone app](https://img.shields.io/badge/iPhone-Core_ML-111111?logo=apple&logoColor=white)](https://github.com/neonforestmist/Clover-Image-Tiny-iOS)
-[![License](https://img.shields.io/badge/Code-Apache_2.0-D22128?logo=apache&logoColor=white)](LICENSE)
-
-A visual, local workspace for training compact style LoRAs for
+A native Python desktop application for training compact style LoRAs for
 [`neonforestmist/Clover-Image-Tiny`](https://huggingface.co/neonforestmist/Clover-Image-Tiny)
 and exporting its stateful Core ML U-Net for iPhone.
+
+The interface is built with Qt through PySide6. It opens as an ordinary desktop
+window, uses the operating system's standard controls and file pickers, and does
+not start a web server or open a browser.
 
 The base model stays shared. A rank-16 style is roughly 6.9 MB and remains a
 normal `.safetensors` file; the iOS app loads it into 144 Core ML state tensors
 instead of downloading another roughly 648 MB U-Net.
 
 <p align="center">
-  <img src="assets/gui-training.png" alt="Clover Studio training workspace" width="1200">
+  <img src="assets/gui-training.png" alt="Native Clover trainer window" width="1200">
 </p>
 
-## Start the studio
+## Start the desktop app
 
 Use Python 3.11 or 3.12. Install the PyTorch build appropriate for your CUDA,
 ROCm, Apple Silicon, or CPU environment first, then install this repository.
@@ -35,8 +33,8 @@ python -m pip install -r requirements.txt
 python trainer_gui.py
 ```
 
-Open `http://127.0.0.1:7860`. The server listens only on localhost unless you
-explicitly pass `--share`.
+The application window opens directly. Nothing is served on localhost and
+there is no share mode.
 
 ## Training workspace
 
@@ -68,11 +66,11 @@ frozen.
 
 ## Core ML workspace
 
-Core ML conversion is part of the same studio—no shell-only handoff is
+Core ML conversion is part of the same application—no shell-only handoff is
 required.
 
 <p align="center">
-  <img src="assets/gui-coreml.png" alt="Clover Studio Core ML export workspace" width="1200">
+  <img src="assets/gui-coreml.png" alt="Native Clover Core ML export window" width="1200">
 </p>
 
 The **Core ML export** tab provides:
@@ -88,7 +86,7 @@ The **Core ML export** tab provides:
 
 The stateful export requires macOS, Xcode command-line tools, Python 3.11, and
 iOS 18 or newer at runtime. Keep at least 15 GB free while building the
-converter environment and model package. The studio warns below 15 GB and
+converter environment and model package. The application warns below 15 GB and
 blocks on missing required inputs.
 
 See [`coreml/README.md`](coreml/README.md) for the artifact contract, the
@@ -168,7 +166,8 @@ image.save("sample.png")
 
 ```text
 clover-image-tiny-lora-trainer/
-├── trainer_gui.py          # Clover Studio web-local GUI
+├── trainer_gui.py          # native PySide6 desktop window
+├── trainer_core.py         # GUI-independent workflow and preflight logic
 ├── train_lora.py           # pinned Diffusers training wrapper
 ├── prepare_dataset.py      # local dataset validator
 ├── configs/                # reproducible published recipes

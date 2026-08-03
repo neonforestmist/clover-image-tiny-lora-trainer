@@ -1,991 +1,817 @@
 #!/usr/bin/env python3
-"""Clover Studio: local LoRA training and stateful Core ML export."""
+"""Native desktop application for Clover LoRA training and Core ML export."""
 
 from __future__ import annotations
 
 import argparse
-import html
-import json
-import os
-import platform
-import re
 import shlex
-import shutil
 import subprocess
-import threading
+import sys
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Callable
 
-import gradio as gr
+from PySide6.QtCore import QSize, Qt, QThread, Signal
+from PySide6.QtGui import QAction, QCloseEvent, QIcon, QPixmap
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QSplitter,
+    QTabWidget,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
+import trainer_core as core
 import train_lora
 
 
-ROOT = Path(__file__).resolve().parent
-COREML_DIR = ROOT / "coreml"
-CONFIGS = {
-    path.stem: path for path in sorted((ROOT / "configs").glob("*.json"))
-}
-PROCESS_LOCK = threading.Lock()
-ACTIVE_PROCESS: subprocess.Popen[str] | None = None
-ACTIVE_WORKFLOW = ""
-STEP_PATTERN = re.compile(r"(?<!\d)(\d+)\s*/\s*(\d+)(?!\d)")
+class ProcessThread(QThread):
+    line_received = Signal(str)
+    progress_changed = Signal(int)
+    process_completed = Signal(int)
 
-CSS = """
-:root {
-  --clover: #16a34a;
-  --clover-dark: #15803d;
-  --ink: #17201a;
-  --muted: #66736a;
-  --line: #dce4de;
-  --canvas: #f5f8f5;
-}
+    def __init__(self, command: list[str], workflow: str) -> None:
+        super().__init__()
+        self.command = command
+        self.workflow = workflow
+        self.process: subprocess.Popen[str] | None = None
 
-.gradio-container {
-  --background-fill-primary: #f5f8f5;
-  --background-fill-secondary: #eef3ef;
-  --block-background-fill: #ffffff;
-  --block-label-background-fill: #ffffff;
-  --block-label-text-color: #435047;
-  --block-info-text-color: #66736a;
-  --body-background-fill: #f5f8f5;
-  --body-text-color: #17201a;
-  --body-text-color-subdued: #66736a;
-  --border-color-primary: #dce4de;
-  --button-secondary-background-fill: #ffffff;
-  --button-secondary-background-fill-hover: #f2f7f3;
-  --button-secondary-text-color: #233128;
-  --color-accent-soft: #e5f6e9;
-  --input-background-fill: #f7faf8;
-  --input-background-fill-focus: #ffffff;
-  --input-placeholder-color: #839087;
-  background:
-    radial-gradient(circle at 8% 0%, rgba(22, 163, 74, .10), transparent 28rem),
-    var(--canvas) !important;
-  color: var(--ink);
-  max-width: none !important;
-}
+    def run(self) -> None:
+        progress = 0
+        try:
+            self.process = subprocess.Popen(
+                self.command,
+                cwd=core.ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            assert self.process.stdout is not None
+            for line in self.process.stdout:
+                clean = line.rstrip()
+                self.line_received.emit(clean)
+                if self.workflow == "training":
+                    progress = core.training_progress(clean, progress)
+                else:
+                    progress = core.coreml_progress(clean, progress)
+                self.progress_changed.emit(progress)
+            code = self.process.wait()
+        except Exception as error:  # noqa: BLE001 - report process startup errors
+            self.line_received.emit(f"Could not run command: {error}")
+            code = 1
+        self.process_completed.emit(code)
 
-.app-shell { max-width: 1440px; margin: 0 auto; padding: 24px 28px 56px; }
-.app-header {
-  display: flex; align-items: center; justify-content: space-between; gap: 24px;
-  padding: 16px 0 24px; border-bottom: 1px solid var(--line); margin-bottom: 18px;
-}
-.brand-lockup { display: flex; align-items: center; gap: 14px; }
-.brand-mark {
-  width: 42px; height: 42px; border-radius: 13px; display: grid; place-items: center;
-  color: white; background: linear-gradient(145deg, #22c55e, #15803d);
-  box-shadow: 0 8px 24px rgba(21, 128, 61, .22); font: 700 18px/1 ui-monospace;
-}
-.brand-title { color: var(--ink); font-size: 22px; line-height: 1.15; font-weight: 720; letter-spacing: -.025em; }
-.brand-subtitle { color: var(--muted); font-size: 13px; margin-top: 3px; }
-.local-pill {
-  border: 1px solid #cbd8ce; border-radius: 999px; padding: 7px 11px;
-  color: #435047; background: rgba(255,255,255,.72); font-size: 12px; font-weight: 650;
-}
-.hero {
-  border: 1px solid #d5e2d8; border-radius: 22px; padding: 26px 28px;
-  background: linear-gradient(115deg, rgba(255,255,255,.98), rgba(238,248,240,.92));
-  box-shadow: 0 18px 50px rgba(23, 32, 26, .06); margin: 10px 0 20px;
-}
-.eyebrow { color: var(--clover-dark); font: 700 11px/1.2 ui-monospace; letter-spacing: .12em; text-transform: uppercase; }
-.hero h1 { color: var(--ink); margin: 10px 0 8px; font-size: clamp(28px, 4vw, 46px); line-height: 1.04; letter-spacing: -.045em; }
-.hero p { max-width: 760px; color: var(--muted); font-size: 16px; line-height: 1.6; margin: 0; }
-.workflow-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 22px; }
-.workflow-step { display: flex; align-items: center; gap: 11px; padding: 12px; border-radius: 13px; background: rgba(255,255,255,.78); border: 1px solid #e0e8e2; }
-.step-number { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: #e5f6e9; color: var(--clover-dark); font-size: 12px; font-weight: 800; }
-.workflow-step strong { color: var(--ink); display: block; font-size: 13px; }
-.workflow-step span { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
-
-.workspace-tabs [role="tablist"] { gap: 8px; border: 0 !important; margin-bottom: 16px; }
-.workspace-tabs [role="tab"] { border: 1px solid var(--line) !important; border-radius: 12px !important; min-height: 44px; padding-inline: 18px; font-weight: 680; }
-.workspace-tabs [role="tab"].selected { background: #183f25 !important; color: #fff !important; border-color: #183f25 !important; }
-.section-card {
-  border: 1px solid var(--line) !important; border-radius: 18px !important;
-  background: rgba(255,255,255,.88) !important; padding: 18px !important;
-  box-shadow: 0 8px 30px rgba(23,32,26,.035);
-}
-.section-heading { margin: 0 0 14px; }
-.section-heading .kicker { color: var(--clover-dark); font: 700 11px/1.2 ui-monospace; text-transform: uppercase; letter-spacing: .09em; }
-.section-heading h2 { color: var(--ink); font-size: 19px; line-height: 1.25; margin: 5px 0 4px; letter-spacing: -.02em; }
-.section-heading p { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0; }
-.quiet-card { border: 1px dashed #cad6cc; border-radius: 14px; padding: 14px 16px; background: #f8faf8; color: var(--muted); }
-.metric-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin: 4px 0 14px; }
-.metric { border: 1px solid #dbe5dd; border-radius: 13px; padding: 12px; background: #fbfdfb; }
-.metric strong { display: block; color: var(--ink); font-size: 14px; }
-.metric span { color: var(--muted); font-size: 11px; }
-.status-card { border-radius: 13px; padding: 13px 15px; border: 1px solid #dce5de; background: #f8faf8; }
-.status-card strong { display: block; font-size: 13px; margin-bottom: 3px; }
-.status-card span { color: var(--muted); font-size: 12px; }
-.status-card.running { background: #eff8f1; border-color: #b8ddc1; }
-.status-card.success { background: #ecf9ef; border-color: #a7dcb4; }
-.status-card.error { background: #fff2f2; border-color: #efc0c0; }
-.check-list { display: grid; gap: 7px; margin-top: 8px; }
-.check { display: grid; grid-template-columns: 9px 1fr; gap: 9px; align-items: start; font-size: 12px; color: var(--muted); }
-.check-dot { width: 8px; height: 8px; border-radius: 50%; background: #c5cec7; margin-top: 5px; }
-.check.ok .check-dot { background: #22a447; }
-.check.warn .check-dot { background: #d18b16; }
-.check.bad .check-dot { background: #d64545; }
-.check b { color: var(--ink); }
-.artifact-list { font-size: 12px; line-height: 1.7; color: var(--muted); }
-.artifact-list code { color: var(--ink); background: #edf2ee; padding: 2px 5px; border-radius: 5px; }
-.footer-note { text-align: center; color: var(--muted); font-size: 11px; margin-top: 24px; }
-.gradio-container footer { display: none !important; }
-button.primary-action { min-height: 46px !important; font-weight: 720 !important; }
-button.secondary-action { min-height: 46px !important; font-weight: 650 !important; }
-.gradio-container button.secondary { color: #233128 !important; }
-.console textarea, .command-box textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important; font-size: 12px !important; }
-
-@media (max-width: 760px) {
-  .app-shell { padding: 12px 12px 36px; }
-  .app-header { align-items: flex-start; }
-  .local-pill { display: none; }
-  .hero { padding: 20px; }
-  .workflow-strip, .metric-row { grid-template-columns: 1fr; }
-}
-"""
+    def stop(self) -> None:
+        if self.process is not None and self.process.poll() is None:
+            self.process.terminate()
 
 
-def resolve_path(value: str) -> Path:
-    path = Path(value.strip()).expanduser()
-    return path if path.is_absolute() else (ROOT / path).resolve()
+class DatasetPreviewThread(QThread):
+    preview_ready = Signal(str, object)
+    preview_failed = Signal(str)
+
+    def __init__(self, dataset: str) -> None:
+        super().__init__()
+        self.dataset = dataset
+
+    def run(self) -> None:
+        try:
+            status, samples = core.dataset_preview(self.dataset)
+            self.preview_ready.emit(status, samples)
+        except Exception as error:  # noqa: BLE001 - show dataset errors in the app
+            self.preview_failed.emit(str(error))
 
 
-def format_bytes(size: int) -> str:
-    value = float(size)
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if value < 1024 or unit == "TB":
-            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
-        value /= 1024
-    return f"{size} B"
+class CloverTrainerWindow(QMainWindow):
+    def __init__(self, *, selected_tab: str = "training", demo: bool = False) -> None:
+        super().__init__()
+        self.setWindowTitle("Clover Image Tiny LoRA Trainer")
+        self.resize(1220, 840)
+        self.setMinimumSize(980, 680)
 
+        self.process_thread: ProcessThread | None = None
+        self.preview_thread: DatasetPreviewThread | None = None
+        self.active_log: QPlainTextEdit | None = None
+        self.active_progress: QProgressBar | None = None
+        self.active_status: QLabel | None = None
+        self.active_workflow = ""
 
-def status_card(title: str, detail: str, tone: str = "idle") -> str:
-    return (
-        f'<div class="status-card {html.escape(tone)}">'
-        f"<strong>{html.escape(title)}</strong>"
-        f"<span>{html.escape(detail)}</span></div>"
-    )
+        self._build_menu()
+        self._build_window()
+        self._load_preset(next(iter(core.CONFIGS)))
 
+        if demo:
+            self.dataset_edit.setText("data/example-monet")
+            self.dataset_edit.setCursorPosition(0)
+            self._load_dataset_preview()
+            self._preview_training_command()
+        if selected_tab == "coreml":
+            self.tabs.setCurrentWidget(self.coreml_tab)
+            self._preview_coreml_command()
 
-def section_heading(step: str, title: str, detail: str) -> str:
-    return (
-        '<div class="section-heading">'
-        f'<div class="kicker">{html.escape(step)}</div>'
-        f"<h2>{html.escape(title)}</h2>"
-        f"<p>{html.escape(detail)}</p></div>"
-    )
+    def _build_menu(self) -> None:
+        file_menu = self.menuBar().addMenu("File")
+        quit_action = QAction("Quit", self)
+        quit_action.setShortcut("Ctrl+Q")
+        quit_action.triggered.connect(self.close)
+        file_menu.addAction(quit_action)
 
+        help_menu = self.menuBar().addMenu("Help")
+        about_action = QAction("About Clover Trainer", self)
+        about_action.triggered.connect(self._show_about)
+        help_menu.addAction(about_action)
 
-def config_values(name: str) -> tuple:
-    config = train_lora.load_config(CONFIGS[name])
-    return (
-        config["style"],
-        config["dataset"],
-        config["trigger"],
-        config["validation_prompt"],
-        config.get("output_dir", f"outputs/{config['style']}-lora"),
-        int(config.get("max_train_steps", 1000)),
-        int(config.get("rank", 16)),
-        float(config.get("learning_rate", 1e-4)),
-        int(config.get("train_batch_size", 1)),
-        int(config.get("gradient_accumulation_steps", 1)),
-        config.get("mixed_precision", "fp16"),
-        int(config.get("checkpointing_steps", 250)),
-        int(config.get("seed", train_lora.SEED)),
-        config.get("hub_model_id", ""),
-    )
+    def _build_window(self) -> None:
+        central = QWidget()
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(18, 16, 18, 14)
+        layout.setSpacing(10)
 
+        title = QLabel("Clover Image Tiny LoRA Trainer")
+        title_font = title.font()
+        title_font.setPointSize(title_font.pointSize() + 6)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        layout.addWidget(title)
 
-def make_config(
-    style: str,
-    dataset: str,
-    trigger: str,
-    validation_prompt: str,
-    output_dir: str,
-    max_train_steps: float,
-    rank: float,
-    learning_rate: float,
-    train_batch_size: float,
-    gradient_accumulation_steps: float,
-    mixed_precision: str,
-    checkpointing_steps: float,
-    seed: float,
-    hub_model_id: str,
-) -> dict:
-    return {
-        "style": style.strip(),
-        "dataset": dataset.strip(),
-        "trigger": trigger.strip(),
-        "validation_prompt": validation_prompt.strip(),
-        "output_dir": output_dir.strip(),
-        "max_train_steps": int(max_train_steps),
-        "rank": int(rank),
-        "learning_rate": float(learning_rate),
-        "train_batch_size": int(train_batch_size),
-        "gradient_accumulation_steps": int(gradient_accumulation_steps),
-        "mixed_precision": mixed_precision,
-        "checkpointing_steps": int(checkpointing_steps),
-        "warmup_steps": max(int(max_train_steps) // 10, 0),
-        "snr_gamma": 5.0,
-        "dataloader_num_workers": 2,
-        "seed": int(seed),
-        "hub_model_id": hub_model_id.strip(),
-    }
-
-
-def training_command(
-    config: dict,
-    base_model: str,
-    mode: str,
-    push_to_hub: bool,
-    *,
-    fetch: bool,
-) -> list[str]:
-    trainer = (
-        train_lora.fetch_trainer()
-        if fetch
-        else train_lora.TRAINERS_DIR
-        / f"train_text_to_image_lora_{train_lora.DIFFUSERS_VERSION}.py"
-    )
-    return train_lora.build_command(
-        trainer,
-        config,
-        base_model=base_model.strip(),
-        smoke=mode == "5-step smoke test",
-        push_to_hub=push_to_hub,
-    )
-
-
-def preview_training_command(
-    base_model: str,
-    mode: str,
-    push_to_hub: bool,
-    *fields,
-) -> str:
-    try:
-        command = training_command(
-            make_config(*fields),
-            base_model,
-            mode,
-            push_to_hub,
-            fetch=False,
+        subtitle = QLabel(
+            "Train compact style files and export the shared stateful Core ML model. "
+            "All work runs as local processes on this computer."
         )
-        display_command = []
-        for argument in command:
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        self.tabs = QTabWidget()
+        self.training_tab = self._build_training_tab()
+        self.coreml_tab = self._build_coreml_tab()
+        self.tabs.addTab(self.training_tab, "Training")
+        self.tabs.addTab(self.coreml_tab, "Core ML")
+        self.tabs.currentChanged.connect(self._tab_changed)
+        layout.addWidget(self.tabs, 1)
+
+        self.setCentralWidget(central)
+        self.statusBar().showMessage("Ready")
+
+    def _build_training_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QHBoxLayout(tab)
+        layout.setContentsMargins(10, 12, 10, 10)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(self._build_training_form())
+        splitter.addWidget(self._build_training_run_panel())
+        splitter.setSizes([450, 720])
+        layout.addWidget(splitter)
+        return tab
+
+    def _build_training_form(self) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumWidth(390)
+        container = QWidget()
+        layout = QVBoxLayout(container)
+
+        dataset_group = QGroupBox("1. Style and dataset")
+        dataset_form = QFormLayout(dataset_group)
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItems(list(core.CONFIGS))
+        self.preset_combo.currentTextChanged.connect(self._load_preset)
+        dataset_form.addRow("Recipe", self.preset_combo)
+        self.style_edit = QLineEdit()
+        dataset_form.addRow("Style name", self.style_edit)
+        self.dataset_edit = QLineEdit()
+        dataset_form.addRow("Dataset", self._path_row(self.dataset_edit, self._choose_dataset_folder))
+        self.trigger_edit = QLineEdit()
+        dataset_form.addRow("Trigger phrase", self.trigger_edit)
+        self.validation_prompt_edit = QPlainTextEdit()
+        self.validation_prompt_edit.setFixedHeight(58)
+        dataset_form.addRow("Validation prompt", self.validation_prompt_edit)
+        self.load_preview_button = QPushButton("Load dataset preview")
+        self.load_preview_button.clicked.connect(self._load_dataset_preview)
+        dataset_form.addRow("", self.load_preview_button)
+        layout.addWidget(dataset_group)
+
+        settings_group = QGroupBox("2. Training settings")
+        settings_form = QFormLayout(settings_group)
+        self.base_model_edit = QLineEdit(train_lora.BASE_MODEL)
+        self.base_model_edit.setCursorPosition(0)
+        settings_form.addRow("Base model", self.base_model_edit)
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["5-step smoke test", "Full training"])
+        settings_form.addRow("Run mode", self.mode_combo)
+
+        steps_rank = QWidget()
+        steps_rank_layout = QHBoxLayout(steps_rank)
+        steps_rank_layout.setContentsMargins(0, 0, 0, 0)
+        self.steps_spin = QSpinBox()
+        self.steps_spin.setRange(5, 10000)
+        self.rank_combo = QComboBox()
+        self.rank_combo.addItems(["4", "8", "16", "32"])
+        steps_rank_layout.addWidget(QLabel("Steps"))
+        steps_rank_layout.addWidget(self.steps_spin)
+        steps_rank_layout.addSpacing(8)
+        steps_rank_layout.addWidget(QLabel("Rank"))
+        steps_rank_layout.addWidget(self.rank_combo)
+        settings_form.addRow("Plan", steps_rank)
+
+        self.learning_rate_spin = QDoubleSpinBox()
+        self.learning_rate_spin.setDecimals(6)
+        self.learning_rate_spin.setRange(0.000001, 1.0)
+        self.learning_rate_spin.setSingleStep(0.00001)
+        settings_form.addRow("Learning rate", self.learning_rate_spin)
+
+        batch_row = QWidget()
+        batch_layout = QHBoxLayout(batch_row)
+        batch_layout.setContentsMargins(0, 0, 0, 0)
+        self.batch_spin = QSpinBox()
+        self.batch_spin.setRange(1, 64)
+        self.accumulation_spin = QSpinBox()
+        self.accumulation_spin.setRange(1, 128)
+        batch_layout.addWidget(QLabel("Batch"))
+        batch_layout.addWidget(self.batch_spin)
+        batch_layout.addSpacing(8)
+        batch_layout.addWidget(QLabel("Accumulation"))
+        batch_layout.addWidget(self.accumulation_spin)
+        settings_form.addRow("Batching", batch_row)
+
+        self.precision_combo = QComboBox()
+        self.precision_combo.addItems(["fp16", "bf16", "no"])
+        settings_form.addRow("Mixed precision", self.precision_combo)
+        self.checkpoint_spin = QSpinBox()
+        self.checkpoint_spin.setRange(1, 10000)
+        settings_form.addRow("Checkpoint interval", self.checkpoint_spin)
+        self.seed_spin = QSpinBox()
+        self.seed_spin.setRange(0, 2_147_483_647)
+        settings_form.addRow("Seed", self.seed_spin)
+        self.output_edit = QLineEdit()
+        settings_form.addRow("Output folder", self._path_row(self.output_edit, self._choose_output_folder))
+        self.hub_edit = QLineEdit()
+        settings_form.addRow("Hugging Face repo", self.hub_edit)
+        self.push_checkbox = QCheckBox("Push the finished style after training")
+        settings_form.addRow("", self.push_checkbox)
+        layout.addWidget(settings_group)
+        layout.addStretch(1)
+        scroll.setWidget(container)
+        return scroll
+
+    def _build_training_run_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+
+        preview_group = QGroupBox("Dataset preview")
+        preview_layout = QVBoxLayout(preview_group)
+        self.preview_status = QLabel("Select Load dataset preview to inspect up to 12 pairs.")
+        self.preview_status.setWordWrap(True)
+        preview_layout.addWidget(self.preview_status)
+        self.dataset_gallery = self._image_list()
+        self.dataset_gallery.setMinimumHeight(200)
+        preview_layout.addWidget(self.dataset_gallery, 1)
+        layout.addWidget(preview_group, 2)
+
+        run_group = QGroupBox("3. Review and run")
+        run_layout = QVBoxLayout(run_group)
+        self.training_command_box = QPlainTextEdit()
+        self.training_command_box.setReadOnly(True)
+        self.training_command_box.setPlaceholderText("Preview the command before starting.")
+        self.training_command_box.setMaximumHeight(98)
+        run_layout.addWidget(self.training_command_box)
+
+        buttons = QHBoxLayout()
+        self.training_preview_button = QPushButton("Preview command")
+        self.training_preview_button.clicked.connect(self._preview_training_command)
+        self.training_start_button = QPushButton("Start training")
+        self.training_start_button.clicked.connect(self._start_training)
+        self.training_stop_button = QPushButton("Stop")
+        self.training_stop_button.setEnabled(False)
+        self.training_stop_button.clicked.connect(self._stop_process)
+        buttons.addWidget(self.training_preview_button)
+        buttons.addWidget(self.training_start_button)
+        buttons.addWidget(self.training_stop_button)
+        run_layout.addLayout(buttons)
+
+        self.training_progress = QProgressBar()
+        self.training_progress.setRange(0, 100)
+        self.training_status = QLabel("Ready")
+        run_layout.addWidget(self.training_progress)
+        run_layout.addWidget(self.training_status)
+        layout.addWidget(run_group)
+
+        output_tabs = QTabWidget()
+        self.training_log = QPlainTextEdit()
+        self.training_log.setReadOnly(True)
+        self.training_log.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.sample_gallery = self._image_list()
+        output_tabs.addTab(self.training_log, "Log")
+        output_tabs.addTab(self.sample_gallery, "Validation samples")
+        layout.addWidget(output_tabs, 2)
+        return panel
+
+    def _build_coreml_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(10, 12, 10, 10)
+
+        top_splitter = QSplitter(Qt.Horizontal)
+        top_splitter.addWidget(self._build_coreml_input_panel())
+        top_splitter.addWidget(self._build_coreml_check_panel())
+        top_splitter.setSizes([580, 580])
+        layout.addWidget(top_splitter, 2)
+
+        run_group = QGroupBox("3. Run selected Core ML step")
+        run_layout = QVBoxLayout(run_group)
+        self.coreml_command_box = QPlainTextEdit()
+        self.coreml_command_box.setReadOnly(True)
+        self.coreml_command_box.setMaximumHeight(88)
+        self.coreml_command_box.setPlaceholderText("Preview the command before starting.")
+        run_layout.addWidget(self.coreml_command_box)
+
+        buttons = QHBoxLayout()
+        self.coreml_preview_button = QPushButton("Preview command")
+        self.coreml_preview_button.clicked.connect(self._preview_coreml_command)
+        self.coreml_start_button = QPushButton("Run selected step")
+        self.coreml_start_button.clicked.connect(self._start_coreml)
+        self.coreml_stop_button = QPushButton("Stop")
+        self.coreml_stop_button.setEnabled(False)
+        self.coreml_stop_button.clicked.connect(self._stop_process)
+        buttons.addWidget(self.coreml_preview_button)
+        buttons.addWidget(self.coreml_start_button)
+        buttons.addWidget(self.coreml_stop_button)
+        run_layout.addLayout(buttons)
+
+        self.coreml_progress = QProgressBar()
+        self.coreml_status = QLabel("Ready")
+        run_layout.addWidget(self.coreml_progress)
+        run_layout.addWidget(self.coreml_status)
+        layout.addWidget(run_group)
+
+        log_group = QGroupBox("Conversion log")
+        log_layout = QVBoxLayout(log_group)
+        self.coreml_log = QPlainTextEdit()
+        self.coreml_log.setReadOnly(True)
+        self.coreml_log.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        log_layout.addWidget(self.coreml_log)
+        layout.addWidget(log_group, 2)
+        return tab
+
+    def _build_coreml_input_panel(self) -> QWidget:
+        group = QGroupBox("1. Inputs and workflow")
+        form = QFormLayout(group)
+        self.model_dir_edit = QLineEdit("/path/to/Clover-Image-Tiny")
+        self.model_dir_edit.setCursorPosition(0)
+        form.addRow("Clover model folder", self._path_row(self.model_dir_edit, self._choose_model_folder))
+        self.style_file_edit = QLineEdit("outputs/monet-lora/pytorch_lora_weights.safetensors")
+        self.style_file_edit.setCursorPosition(0)
+        form.addRow("Style .safetensors", self._path_row(self.style_file_edit, self._choose_style_file))
+        self.coreml_output_edit = QLineEdit("coreml-models/clover-stateful")
+        self.coreml_output_edit.setCursorPosition(0)
+        form.addRow("Core ML output", self._path_row(self.coreml_output_edit, self._choose_coreml_output))
+        self.coreml_action_combo = QComboBox()
+        self.coreml_action_combo.addItems(core.COREML_ACTIONS)
+        self.coreml_action_combo.currentTextChanged.connect(self._coreml_action_changed)
+        form.addRow("Workflow step", self.coreml_action_combo)
+        self.psnr_spin = QDoubleSpinBox()
+        self.psnr_spin.setRange(1, 100)
+        self.psnr_spin.setDecimals(1)
+        self.psnr_spin.setValue(35.0)
+        form.addRow("Minimum PSNR", self.psnr_spin)
+        note = QLabel(
+            "Run the steps in order: export the stateful U-Net, compile it for Xcode, "
+            "then validate base and style parity."
+        )
+        note.setWordWrap(True)
+        form.addRow("", note)
+        return group
+
+    def _build_coreml_check_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        requirements_group = QGroupBox("2. Requirements")
+        requirements_layout = QVBoxLayout(requirements_group)
+        self.requirements_tree = QTreeWidget()
+        self.requirements_tree.setHeaderLabels(["Requirement", "Status", "Details"])
+        self.requirements_tree.setRootIsDecorated(False)
+        self.requirements_tree.setAlternatingRowColors(True)
+        self.requirements_tree.header().setStretchLastSection(True)
+        requirements_layout.addWidget(self.requirements_tree)
+        self.check_requirements_button = QPushButton("Check requirements")
+        self.check_requirements_button.clicked.connect(self._check_coreml_requirements)
+        requirements_layout.addWidget(self.check_requirements_button)
+        layout.addWidget(requirements_group, 2)
+
+        artifacts_group = QGroupBox("Output artifacts")
+        artifacts_layout = QVBoxLayout(artifacts_group)
+        self.artifacts_tree = QTreeWidget()
+        self.artifacts_tree.setHeaderLabels(["Artifact", "Type or size", "Path"])
+        self.artifacts_tree.setRootIsDecorated(False)
+        self.artifacts_tree.header().setStretchLastSection(True)
+        artifacts_layout.addWidget(self.artifacts_tree)
+        self.refresh_artifacts_button = QPushButton("Refresh artifacts")
+        self.refresh_artifacts_button.clicked.connect(self._refresh_artifacts)
+        artifacts_layout.addWidget(self.refresh_artifacts_button)
+        layout.addWidget(artifacts_group, 1)
+        return panel
+
+    @staticmethod
+    def _path_row(edit: QLineEdit, callback: Callable[[], None]) -> QWidget:
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        button = QPushButton("Choose…")
+        button.clicked.connect(callback)
+        layout.addWidget(edit, 1)
+        layout.addWidget(button)
+        return row
+
+    @staticmethod
+    def _image_list() -> QListWidget:
+        widget = QListWidget()
+        widget.setViewMode(QListWidget.ViewMode.IconMode)
+        widget.setIconSize(QSize(140, 140))
+        widget.setResizeMode(QListWidget.ResizeMode.Adjust)
+        widget.setMovement(QListWidget.Movement.Static)
+        widget.setSpacing(8)
+        widget.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        return widget
+
+    def _show_about(self) -> None:
+        QMessageBox.about(
+            self,
+            "About Clover Trainer",
+            "Clover Image Tiny LoRA Trainer\n\n"
+            "Native Python desktop controls for Diffusers LoRA training and Core ML export.\n"
+            "Code: Apache-2.0\nModel derivatives: CreativeML Open RAIL-M",
+        )
+
+    def _tab_changed(self, index: int) -> None:
+        if self.tabs.widget(index) is self.coreml_tab:
+            for edit in (
+                self.model_dir_edit,
+                self.style_file_edit,
+                self.coreml_output_edit,
+            ):
+                edit.setCursorPosition(0)
+        self.tabs.setFocus()
+
+    def _choose_dataset_folder(self) -> None:
+        self._choose_directory(self.dataset_edit, "Choose local imagefolder dataset")
+
+    def _choose_output_folder(self) -> None:
+        self._choose_directory(self.output_edit, "Choose training output folder")
+
+    def _choose_model_folder(self) -> None:
+        self._choose_directory(self.model_dir_edit, "Choose Clover model folder")
+
+    def _choose_coreml_output(self) -> None:
+        self._choose_directory(self.coreml_output_edit, "Choose Core ML output folder")
+
+    def _choose_style_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Choose Clover style weights",
+            str(core.ROOT),
+            "SafeTensors files (*.safetensors)",
+        )
+        if path:
+            self.style_file_edit.setText(path)
+            self.style_file_edit.setCursorPosition(0)
+
+    def _choose_directory(self, edit: QLineEdit, title: str) -> None:
+        current = core.resolve_path(edit.text())
+        start = current if current.is_dir() else core.ROOT
+        path = QFileDialog.getExistingDirectory(self, title, str(start))
+        if path:
+            edit.setText(path)
+            edit.setCursorPosition(0)
+
+    def _load_preset(self, name: str) -> None:
+        if not name or name not in core.CONFIGS:
+            return
+        values = core.config_values(name)
+        self.style_edit.setText(values["style"])
+        self.dataset_edit.setText(values["dataset"])
+        self.trigger_edit.setText(values["trigger"])
+        self.validation_prompt_edit.setPlainText(values["validation_prompt"])
+        self.output_edit.setText(values["output_dir"])
+        self.steps_spin.setValue(values["max_train_steps"])
+        self.rank_combo.setCurrentText(str(values["rank"]))
+        self.learning_rate_spin.setValue(values["learning_rate"])
+        self.batch_spin.setValue(values["train_batch_size"])
+        self.accumulation_spin.setValue(values["gradient_accumulation_steps"])
+        self.precision_combo.setCurrentText(values["mixed_precision"])
+        self.checkpoint_spin.setValue(values["checkpointing_steps"])
+        self.seed_spin.setValue(values["seed"])
+        self.hub_edit.setText(values["hub_model_id"])
+        for edit in (
+            self.style_edit,
+            self.dataset_edit,
+            self.trigger_edit,
+            self.output_edit,
+            self.hub_edit,
+        ):
+            edit.setCursorPosition(0)
+
+    def _training_values(self) -> dict[str, Any]:
+        return {
+            "style": self.style_edit.text(),
+            "dataset": self.dataset_edit.text(),
+            "trigger": self.trigger_edit.text(),
+            "validation_prompt": self.validation_prompt_edit.toPlainText(),
+            "output_dir": self.output_edit.text(),
+            "max_train_steps": self.steps_spin.value(),
+            "rank": int(self.rank_combo.currentText()),
+            "learning_rate": self.learning_rate_spin.value(),
+            "train_batch_size": self.batch_spin.value(),
+            "gradient_accumulation_steps": self.accumulation_spin.value(),
+            "mixed_precision": self.precision_combo.currentText(),
+            "checkpointing_steps": self.checkpoint_spin.value(),
+            "seed": self.seed_spin.value(),
+            "hub_model_id": self.hub_edit.text(),
+        }
+
+    def _load_dataset_preview(self) -> None:
+        if self.preview_thread is not None and self.preview_thread.isRunning():
+            return
+        self.load_preview_button.setEnabled(False)
+        self.preview_status.setText("Loading dataset preview…")
+        self.preview_thread = DatasetPreviewThread(self.dataset_edit.text())
+        self.preview_thread.preview_ready.connect(self._dataset_preview_ready)
+        self.preview_thread.preview_failed.connect(self._dataset_preview_failed)
+        self.preview_thread.finished.connect(self._dataset_preview_finished)
+        self.preview_thread.start()
+
+    def _dataset_preview_ready(self, status: str, samples: object) -> None:
+        self.preview_status.setText(status)
+        self._populate_images(self.dataset_gallery, list(samples))
+
+    def _dataset_preview_failed(self, error: str) -> None:
+        self.preview_status.setText(f"Dataset preview failed: {error}")
+        self.dataset_gallery.clear()
+
+    def _dataset_preview_finished(self) -> None:
+        self.load_preview_button.setEnabled(True)
+        if self.preview_thread is not None:
+            self.preview_thread.deleteLater()
+        self.preview_thread = None
+
+    def _populate_images(self, widget: QListWidget, samples: list[tuple[Any, str]]) -> None:
+        widget.clear()
+        for source, caption in samples:
+            pixmap = self._pixmap(source)
+            item = QListWidgetItem(caption[:54] + ("…" if len(caption) > 54 else ""))
+            item.setToolTip(caption)
+            if pixmap is not None and not pixmap.isNull():
+                item.setIcon(QIcon(pixmap))
+            item.setSizeHint(QSize(168, 184))
+            widget.addItem(item)
+
+    @staticmethod
+    def _pixmap(source: Any) -> QPixmap | None:
+        if isinstance(source, Path):
+            pixmap = QPixmap(str(source))
+        else:
             try:
-                display_command.append(str(Path(argument).relative_to(ROOT)))
-            except (TypeError, ValueError):
-                display_command.append(argument)
-        return shlex.join(display_command)
-    except Exception as error:  # noqa: BLE001
-        return f"Could not build command: {error}"
+                from PIL.ImageQt import ImageQt
 
+                pixmap = QPixmap.fromImage(ImageQt(source))
+            except Exception:  # noqa: BLE001 - thumbnails are optional
+                return None
+        return pixmap.scaled(
+            QSize(140, 140),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
 
-def local_dataset_preview(root: Path) -> list[tuple[str, str]]:
-    metadata = root / "metadata.jsonl"
-    rows = [
-        json.loads(line)
-        for line in metadata.read_text().splitlines()
-        if line.strip()
-    ]
-    return [
-        (str(root / row["file_name"]), row.get("text", ""))
-        for row in rows[:12]
-    ]
+    def _preview_training_command(self) -> None:
+        try:
+            command = core.training_preview(
+                self._training_values(),
+                self.base_model_edit.text(),
+                self.mode_combo.currentText(),
+                self.push_checkbox.isChecked(),
+            )
+            self.training_command_box.setPlainText(command)
+            self.training_status.setText("Command ready")
+        except Exception as error:  # noqa: BLE001
+            self.training_status.setText(f"Could not build command: {error}")
 
-
-def preview_dataset(
-    dataset_name: str,
-    image_column: str = "image",
-    caption_column: str = "text",
-) -> tuple[str, list]:
-    try:
-        local = resolve_path(dataset_name)
-        if local.exists():
-            gallery = local_dataset_preview(local)
-            return f"Loaded {len(gallery)} local training pairs.", gallery
-
-        # Keep startup light; the Hub client is needed only when this button is used.
-        from datasets import load_dataset
-
-        dataset = load_dataset(dataset_name, split="train", streaming=True)
-        gallery = []
-        for index, row in enumerate(dataset):
-            if index >= 12:
-                break
-            gallery.append((row[image_column], str(row.get(caption_column, ""))))
-        return f"Loaded {len(gallery)} streamed Hub samples.", gallery
-    except Exception as error:  # noqa: BLE001
-        return f"Dataset preview failed: {error}", []
-
-
-def sample_images(output_dir: str) -> list[tuple[str, str]]:
-    root = resolve_path(output_dir)
-    if not root.exists():
-        return []
-    images = sorted(
-        root.rglob("*.png"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )[:12]
-    return [(str(path), path.name) for path in images]
-
-
-def claim_process(command: list[str], workflow: str) -> subprocess.Popen[str]:
-    global ACTIVE_PROCESS, ACTIVE_WORKFLOW
-    with PROCESS_LOCK:
-        if ACTIVE_PROCESS is not None and ACTIVE_PROCESS.poll() is None:
-            raise RuntimeError(f"{ACTIVE_WORKFLOW} is already running")
-        ACTIVE_PROCESS = subprocess.Popen(
+    def _start_training(self) -> None:
+        if self.process_thread is not None:
+            return
+        try:
+            values = self._training_values()
+            config = core.make_config(values)
+            command = core.training_command(
+                config,
+                self.base_model_edit.text(),
+                self.mode_combo.currentText(),
+                self.push_checkbox.isChecked(),
+                fetch=True,
+            )
+            self.training_command_box.setPlainText(core.display_command(command))
+        except Exception as error:  # noqa: BLE001
+            QMessageBox.warning(self, "Could not start training", str(error))
+            return
+        self._start_process(
             command,
-            cwd=ROOT,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-        ACTIVE_WORKFLOW = workflow
-        return ACTIVE_PROCESS
-
-
-def release_process(process: subprocess.Popen[str]) -> None:
-    global ACTIVE_PROCESS, ACTIVE_WORKFLOW
-    with PROCESS_LOCK:
-        if ACTIVE_PROCESS is process:
-            ACTIVE_PROCESS = None
-            ACTIVE_WORKFLOW = ""
-
-
-def training_updates(
-    base_model: str,
-    mode: str,
-    push_to_hub: bool,
-    *fields,
-) -> Iterator[tuple[str, float, str, list]]:
-    try:
-        config = make_config(*fields)
-        command = training_command(
-            config,
-            base_model,
-            mode,
-            push_to_hub,
-            fetch=True,
-        )
-        process = claim_process(command, "LoRA training")
-    except Exception as error:  # noqa: BLE001
-        yield status_card("Could not start", str(error), "error"), 0, "", []
-        return
-
-    logs = ["$ " + shlex.join(command)]
-    progress = 0.0
-    yield (
-        status_card("Training in progress", "The live log will update below.", "running"),
-        progress,
-        "\n".join(logs),
-        sample_images(config["output_dir"]),
-    )
-
-    assert process.stdout is not None
-    for line_number, line in enumerate(process.stdout, start=1):
-        logs.append(line.rstrip())
-        logs = logs[-500:]
-        matches = STEP_PATTERN.findall(line)
-        if matches:
-            current, total = map(int, matches[-1])
-            if total > 0:
-                progress = min(max(current / total, 0), 1)
-        images = sample_images(config["output_dir"]) if line_number % 20 == 0 else gr.skip()
-        yield (
-            status_card("Training in progress", f"{progress:.0%} complete", "running"),
-            progress,
-            "\n".join(logs),
-            images,
+            workflow="training",
+            log=self.training_log,
+            progress=self.training_progress,
+            status=self.training_status,
         )
 
-    return_code = process.wait()
-    release_process(process)
-    if return_code == 0:
-        final_status = status_card(
-            "Training complete",
-            "The style weights and validation samples are ready.",
-            "success",
+    def _coreml_action_changed(self, _action: str = "") -> None:
+        self._preview_coreml_command()
+        self._check_coreml_requirements()
+
+    def _coreml_requirements(self) -> list[core.Requirement]:
+        return core.coreml_requirements(
+            self.coreml_action_combo.currentText(),
+            self.model_dir_edit.text(),
+            self.style_file_edit.text(),
+            self.coreml_output_edit.text(),
         )
-    else:
-        final_status = status_card(
-            "Training stopped",
-            f"The trainer exited with code {return_code}. Review the log.",
-            "error",
+
+    def _check_coreml_requirements(self) -> None:
+        requirements = self._coreml_requirements()
+        self.requirements_tree.clear()
+        for requirement in requirements:
+            QTreeWidgetItem(
+                self.requirements_tree,
+                [requirement.name, requirement.status, requirement.detail],
+            )
+        self.requirements_tree.resizeColumnToContents(0)
+        self.requirements_tree.resizeColumnToContents(1)
+        missing = sum(requirement.status == "Missing" for requirement in requirements)
+        self.coreml_status.setText(
+            "Ready for this step" if missing == 0 else f"{missing} requirement(s) need attention"
         )
-    yield (
-        final_status,
-        1.0 if return_code == 0 else progress,
-        "\n".join(logs),
-        sample_images(config["output_dir"]),
-    )
 
+    def _preview_coreml_command(self) -> None:
+        try:
+            command = core.coreml_preview(
+                self.coreml_action_combo.currentText(),
+                self.model_dir_edit.text(),
+                self.style_file_edit.text(),
+                self.coreml_output_edit.text(),
+                self.psnr_spin.value(),
+            )
+            self.coreml_command_box.setPlainText(command)
+        except Exception as error:  # noqa: BLE001
+            self.coreml_command_box.setPlainText(f"Could not build command: {error}")
 
-COREML_ACTIONS = (
-    "1 · Export stateful U-Net",
-    "2 · Compile for Xcode",
-    "3 · Validate parity",
-)
+    def _start_coreml(self) -> None:
+        if self.process_thread is not None:
+            return
+        requirements = self._coreml_requirements()
+        missing = [item.name for item in requirements if item.status == "Missing"]
+        self._check_coreml_requirements()
+        if missing:
+            QMessageBox.warning(
+                self,
+                "Core ML requirements are missing",
+                "Resolve these requirements before running:\n\n" + "\n".join(missing),
+            )
+            return
+        command = core.coreml_command(
+            self.coreml_action_combo.currentText(),
+            self.model_dir_edit.text(),
+            self.style_file_edit.text(),
+            self.coreml_output_edit.text(),
+            self.psnr_spin.value(),
+        )
+        self.coreml_command_box.setPlainText(core.display_command(command))
+        self._start_process(
+            command,
+            workflow="coreml",
+            log=self.coreml_log,
+            progress=self.coreml_progress,
+            status=self.coreml_status,
+        )
 
+    def _start_process(
+        self,
+        command: list[str],
+        *,
+        workflow: str,
+        log: QPlainTextEdit,
+        progress: QProgressBar,
+        status: QLabel,
+    ) -> None:
+        log.clear()
+        log.appendPlainText("$ " + shlex.join(command))
+        progress.setValue(0)
+        status.setText("Running")
+        self.active_log = log
+        self.active_progress = progress
+        self.active_status = status
+        self.active_workflow = workflow
+        self._set_process_buttons(running=True)
 
-def coreml_paths(
-    model_dir: str,
-    style_file: str,
-    output_dir: str,
-) -> tuple[Path, Path, Path]:
-    return (
-        resolve_path(model_dir),
-        resolve_path(style_file),
-        resolve_path(output_dir),
-    )
+        self.process_thread = ProcessThread(command, workflow)
+        self.process_thread.line_received.connect(log.appendPlainText)
+        self.process_thread.progress_changed.connect(progress.setValue)
+        self.process_thread.process_completed.connect(self._process_completed)
+        self.process_thread.start()
+        self.statusBar().showMessage("Training is running" if workflow == "training" else "Core ML task is running")
 
+    def _stop_process(self) -> None:
+        if self.process_thread is None:
+            return
+        self.process_thread.stop()
+        if self.active_status is not None:
+            self.active_status.setText("Stop requested")
 
-def coreml_command(
-    action: str,
-    model_dir: str,
-    style_file: str,
-    output_dir: str,
-    minimum_psnr: float,
-) -> list[str]:
-    model, style, output = coreml_paths(model_dir, style_file, output_dir)
-    if action == COREML_ACTIONS[0]:
-        return [str(COREML_DIR / "export_stateful.sh"), str(model), str(output), str(style)]
-    if action == COREML_ACTIONS[1]:
-        return [
-            "xcrun",
-            "coremlcompiler",
-            "compile",
-            str(output / "Unet.mlpackage"),
-            str(output / "compiled"),
-        ]
-    if action == COREML_ACTIONS[2]:
-        return [
-            str(ROOT / ".venv-coreml" / "bin" / "python"),
-            str(COREML_DIR / "validate_stateful_lora.py"),
-            "--model-version",
-            str(model),
-            "--coreml-model",
-            str(output / "Unet.mlpackage"),
-            "--adapter-schema",
-            str(output / "coreml-state-schema.json"),
-            "--lora-weights",
-            str(style),
-            "--minimum-psnr",
-            str(float(minimum_psnr)),
-        ]
-    raise ValueError(f"Unknown Core ML action: {action}")
-
-
-def preview_coreml_command(
-    action: str,
-    model_dir: str,
-    style_file: str,
-    output_dir: str,
-    minimum_psnr: float,
-) -> str:
-    try:
-        model = model_dir.strip()
-        style = style_file.strip()
-        output = output_dir.strip().rstrip("/")
-        if action == COREML_ACTIONS[0]:
-            command = ["./coreml/export_stateful.sh", model, output, style]
-        elif action == COREML_ACTIONS[1]:
-            command = [
-                "xcrun",
-                "coremlcompiler",
-                "compile",
-                f"{output}/Unet.mlpackage",
-                f"{output}/compiled",
-            ]
-        elif action == COREML_ACTIONS[2]:
-            command = [
-                ".venv-coreml/bin/python",
-                "coreml/validate_stateful_lora.py",
-                "--model-version",
-                model,
-                "--coreml-model",
-                f"{output}/Unet.mlpackage",
-                "--adapter-schema",
-                f"{output}/coreml-state-schema.json",
-                "--lora-weights",
-                style,
-                "--minimum-psnr",
-                str(float(minimum_psnr)),
-            ]
+    def _process_completed(self, code: int) -> None:
+        if self.active_status is not None:
+            self.active_status.setText("Complete" if code == 0 else f"Stopped with exit code {code}")
+        if code == 0 and self.active_progress is not None:
+            self.active_progress.setValue(100)
+        if self.active_workflow == "training":
+            samples = [(path, path.name) for path in core.sample_images(self.output_edit.text())]
+            self._populate_images(self.sample_gallery, samples)
         else:
-            raise ValueError(f"Unknown Core ML action: {action}")
-        return shlex.join(command)
-    except Exception as error:  # noqa: BLE001
-        return f"Could not build command: {error}"
+            self._refresh_artifacts()
+        self._set_process_buttons(running=False)
+        if self.process_thread is not None:
+            self.process_thread.deleteLater()
+        self.process_thread = None
+        self.active_log = None
+        self.active_progress = None
+        self.active_status = None
+        self.active_workflow = ""
+        self.statusBar().showMessage("Ready")
 
+    def _set_process_buttons(self, *, running: bool) -> None:
+        self.training_start_button.setEnabled(not running)
+        self.coreml_start_button.setEnabled(not running)
+        self.training_stop_button.setEnabled(running)
+        self.coreml_stop_button.setEnabled(running)
 
-def coreml_readiness(
-    action: str,
-    model_dir: str,
-    style_file: str,
-    output_dir: str,
-    minimum_psnr: float,
-) -> str:
-    del minimum_psnr
-    model, style, output = coreml_paths(model_dir, style_file, output_dir)
-    checks: list[tuple[str, str, str]] = []
-
-    checks.append(
-        ("ok" if platform.system() == "Darwin" else "bad", "macOS", platform.system())
-    )
-    python_name = os.environ.get("PYTHON_BIN", "python3.11")
-    python_path = shutil.which(python_name)
-    checks.append(
-        ("ok" if python_path else "bad", "Python 3.11", python_path or "Not found")
-    )
-    xcrun = shutil.which("xcrun")
-    checks.append(("ok" if xcrun else "bad", "Xcode tools", xcrun or "Not found"))
-
-    if action in (COREML_ACTIONS[0], COREML_ACTIONS[2]):
-        model_ok = model.is_dir() and (model / "model_index.json").is_file()
-        checks.append(
-            (
-                "ok" if model_ok else "bad",
-                "Clover model",
-                str(model) if model_ok else "Choose a local Diffusers model folder",
+    def _refresh_artifacts(self) -> None:
+        self.artifacts_tree.clear()
+        for artifact in core.coreml_artifacts(self.coreml_output_edit.text()):
+            QTreeWidgetItem(
+                self.artifacts_tree,
+                [artifact.name, artifact.detail, str(artifact.path)],
             )
-        )
-        style_ok = style.is_file() and style.suffix.lower() == ".safetensors"
-        checks.append(
-            (
-                "ok" if style_ok else "bad",
-                "Style weights",
-                f"{style.name} · {format_bytes(style.stat().st_size)}"
-                if style_ok
-                else "Choose a .safetensors file",
+        self.artifacts_tree.resizeColumnToContents(0)
+        self.artifacts_tree.resizeColumnToContents(1)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self.process_thread is not None and self.process_thread.isRunning():
+            answer = QMessageBox.question(
+                self,
+                "A process is still running",
+                "Stop the active process and close the application?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
-        )
-
-    package = output / "Unet.mlpackage"
-    schema = output / "coreml-state-schema.json"
-    if action == COREML_ACTIONS[1]:
-        checks.append(
-            ("ok" if package.is_dir() else "bad", "Stateful U-Net", str(package))
-        )
-    if action == COREML_ACTIONS[2]:
-        checks.extend(
-            [
-                ("ok" if package.is_dir() else "bad", "Stateful U-Net", str(package)),
-                ("ok" if schema.is_file() else "bad", "State schema", str(schema)),
-                (
-                    "ok" if (ROOT / ".venv-coreml/bin/python").is_file() else "bad",
-                    "Converter environment",
-                    "Created automatically during export",
-                ),
-            ]
-        )
-
-    free = shutil.disk_usage(ROOT).free
-    disk_tone = "ok" if free >= 15 * 1024**3 else "warn" if free >= 8 * 1024**3 else "bad"
-    checks.append((disk_tone, "Free disk space", format_bytes(free)))
-
-    rows = "".join(
-        '<div class="check {tone}"><span class="check-dot"></span>'
-        '<span><b>{label}</b> · {detail}</span></div>'.format(
-            tone=html.escape(tone),
-            label=html.escape(label),
-            detail=html.escape(detail),
-        )
-        for tone, label, detail in checks
-    )
-    ready = all(tone != "bad" for tone, _, _ in checks)
-    title = "Ready for this step" if ready else "Setup needs attention"
-    tone = "success" if ready else "error"
-    return (
-        f'<div class="status-card {tone}"><strong>{title}</strong>'
-        '<span>Each requirement is checked locally.</span>'
-        f'<div class="check-list">{rows}</div></div>'
-    )
-
-
-def coreml_artifacts(output_dir: str) -> str:
-    output = resolve_path(output_dir)
-    candidates = [
-        output / "Unet.mlpackage",
-        output / "coreml-state-schema.json",
-        output / "compiled",
-    ]
-    found = [path for path in candidates if path.exists()]
-    if not found:
-        return '<div class="quiet-card">Artifacts will appear here after export.</div>'
-
-    rows = []
-    for path in found:
-        if path.is_file():
-            detail = format_bytes(path.stat().st_size)
-        else:
-            detail = "folder"
-        rows.append(f"<li><code>{html.escape(path.name)}</code> · {detail}</li>")
-    return '<div class="artifact-list"><strong>Output artifacts</strong><ul>' + "".join(rows) + "</ul></div>"
-
-
-def coreml_progress(line: str, current: float) -> float:
-    markers = (
-        ("clone", 0.08),
-        ("install", 0.18),
-        ("loading", 0.32),
-        ("tracing", 0.48),
-        ("convert", 0.68),
-        ("state schema", 0.9),
-        ("psnr", 0.75),
-        ("complete", 0.98),
-    )
-    lowered = line.lower()
-    for marker, progress in markers:
-        if marker in lowered:
-            current = max(current, progress)
-    return current
-
-
-def coreml_updates(
-    action: str,
-    model_dir: str,
-    style_file: str,
-    output_dir: str,
-    minimum_psnr: float,
-) -> Iterator[tuple[str, float, str, str]]:
-    try:
-        command = coreml_command(
-            action, model_dir, style_file, output_dir, minimum_psnr
-        )
-        process = claim_process(command, "Core ML conversion")
-    except Exception as error:  # noqa: BLE001
-        yield (
-            status_card("Could not start", str(error), "error"),
-            0,
-            "",
-            coreml_artifacts(output_dir),
-        )
-        return
-
-    logs = ["$ " + shlex.join(command)]
-    progress = 0.03
-    yield (
-        status_card("Core ML task running", action, "running"),
-        progress,
-        "\n".join(logs),
-        coreml_artifacts(output_dir),
-    )
-
-    assert process.stdout is not None
-    for line in process.stdout:
-        logs.append(line.rstrip())
-        logs = logs[-500:]
-        progress = coreml_progress(line, progress)
-        yield (
-            status_card("Core ML task running", action, "running"),
-            progress,
-            "\n".join(logs),
-            coreml_artifacts(output_dir),
-        )
-
-    return_code = process.wait()
-    release_process(process)
-    if return_code == 0:
-        final_status = status_card(
-            "Core ML step complete",
-            "The output artifacts are ready for the next step.",
-            "success",
-        )
-    else:
-        final_status = status_card(
-            "Core ML step failed",
-            f"The process exited with code {return_code}. Review the log.",
-            "error",
-        )
-    yield (
-        final_status,
-        1.0 if return_code == 0 else progress,
-        "\n".join(logs),
-        coreml_artifacts(output_dir),
-    )
-
-
-def stop_active_process() -> str:
-    with PROCESS_LOCK:
-        process = ACTIVE_PROCESS
-        workflow = ACTIVE_WORKFLOW
-        if process is None or process.poll() is not None:
-            return status_card("Nothing is running", "There is no active local process.")
-        process.terminate()
-    return status_card("Stop requested", f"Waiting for {workflow} to exit.", "running")
-
-
-def studio_theme() -> gr.Theme:
-    return gr.themes.Base(
-        primary_hue="green",
-        secondary_hue="emerald",
-        neutral_hue="slate",
-    )
-
-
-def build_gui() -> gr.Blocks:
-    first_config = next(iter(CONFIGS))
-    defaults = config_values(first_config)
-
-    with gr.Blocks(title="Clover Studio") as demo:
-        with gr.Column(elem_classes=["app-shell"]):
-            gr.HTML(
-                """
-                <header class="app-header">
-                  <div class="brand-lockup">
-                    <div class="brand-mark">CL</div>
-                    <div><div class="brand-title">Clover Studio</div>
-                    <div class="brand-subtitle">LoRA training and Core ML export</div></div>
-                  </div>
-                  <div class="local-pill">Runs locally · your data stays on this machine</div>
-                </header>
-                <section class="hero">
-                  <div class="eyebrow">Clover Image Tiny</div>
-                  <h1>Train a style. Ship a tiny file.</h1>
-                  <p>Build a focused visual LoRA, inspect every training input, then export one
-                  stateful Core ML base that can load named style files at runtime on iPhone.</p>
-                  <div class="workflow-strip">
-                    <div class="workflow-step"><div class="step-number">01</div><div><strong>Prepare</strong><span>Choose and inspect a dataset</span></div></div>
-                    <div class="workflow-step"><div class="step-number">02</div><div><strong>Train</strong><span>Run a repeatable LoRA recipe</span></div></div>
-                    <div class="workflow-step"><div class="step-number">03</div><div><strong>Export</strong><span>Validate the Core ML runtime</span></div></div>
-                  </div>
-                </section>
-                """
-            )
-
-            with gr.Tabs(elem_classes=["workspace-tabs"]):
-                with gr.Tab("Train a style", id="train"):
-                    with gr.Row(equal_height=False):
-                        with gr.Column(scale=5, elem_classes=["section-card"]):
-                            gr.HTML(section_heading("Step 1", "Style recipe", "Start from a published recipe, then make it yours."))
-                            with gr.Row():
-                                config_name = gr.Dropdown(
-                                    choices=list(CONFIGS), value=first_config, label="Recipe"
-                                )
-                                style = gr.Textbox(value=defaults[0], label="Style name")
-                            dataset = gr.Textbox(value=defaults[1], label="Dataset", info="Hugging Face dataset ID or local imagefolder")
-                            trigger = gr.Textbox(value=defaults[2], label="Trigger phrase")
-                            validation_prompt = gr.Textbox(
-                                value=defaults[3], label="Validation prompt", lines=2
-                            )
-                        with gr.Column(scale=7, elem_classes=["section-card"]):
-                            gr.HTML(section_heading("Dataset check", "See what the model will learn", "Stream up to 12 Hub examples or inspect a local imagefolder."))
-                            preview_status = gr.Markdown("Select **Load dataset preview** to inspect the training pairs.")
-                            preview_gallery = gr.Gallery(
-                                label="Training pairs", columns=3, rows=2, height=350, object_fit="cover"
-                            )
-                            preview_button = gr.Button("Load dataset preview", elem_classes=["secondary-action"])
-
-                    with gr.Row(equal_height=False):
-                        with gr.Column(scale=7, elem_classes=["section-card"]):
-                            gr.HTML(section_heading("Step 2", "Training plan", "Use a smoke test first, then start the full run."))
-                            with gr.Row():
-                                base_model = gr.Textbox(value=train_lora.BASE_MODEL, label="Base model")
-                                mode = gr.Radio(
-                                    ["5-step smoke test", "Full training"],
-                                    value="5-step smoke test",
-                                    label="Run mode",
-                                )
-                            with gr.Row():
-                                max_steps = gr.Slider(100, 3000, value=defaults[5], step=50, label="Training steps")
-                                rank = gr.Radio([4, 8, 16, 32], value=defaults[6], label="LoRA rank")
-                            output_dir = gr.Textbox(value=defaults[4], label="Output directory")
-                            with gr.Accordion("Advanced tuning", open=False):
-                                with gr.Row():
-                                    learning_rate = gr.Number(value=defaults[7], label="Learning rate")
-                                    batch_size = gr.Number(value=defaults[8], label="Batch size", precision=0)
-                                    accumulation = gr.Number(value=defaults[9], label="Gradient accumulation", precision=0)
-                                with gr.Row():
-                                    mixed_precision = gr.Dropdown(["fp16", "bf16", "no"], value=defaults[10], label="Mixed precision")
-                                    checkpoint_steps = gr.Number(value=defaults[11], label="Checkpoint interval", precision=0)
-                                    seed = gr.Number(value=defaults[12], label="Seed", precision=0)
-                                hub_model_id = gr.Textbox(value=defaults[13], label="Hugging Face repository")
-                                push_to_hub = gr.Checkbox(label="Push the finished style to Hugging Face")
-                        with gr.Column(scale=5, elem_classes=["section-card"]):
-                            gr.HTML(section_heading("Step 3", "Review and run", "Nothing starts until you select Start training."))
-                            gr.HTML(
-                                """<div class="metric-row">
-                                <div class="metric"><strong>512 × 512</strong><span>training resolution</span></div>
-                                <div class="metric"><strong>Rank 16</strong><span>about 6.9 MB</span></div>
-                                <div class="metric"><strong>Local</strong><span>accelerate process</span></div>
-                                </div>"""
-                            )
-                            training_status = gr.HTML(status_card("Ready to review", "Preview the exact command before starting."))
-                            training_command_preview = gr.Textbox(
-                                label="Exact command", lines=6, interactive=False, elem_classes=["command-box"]
-                            )
-                            preview_command_button = gr.Button("Preview command")
-                            with gr.Row():
-                                run_button = gr.Button("Start training", variant="primary", elem_classes=["primary-action"])
-                                stop_training_button = gr.Button("Stop", variant="stop", elem_classes=["secondary-action"])
-
-                    with gr.Column(elem_classes=["section-card"]):
-                        gr.HTML(section_heading("Live run", "Progress and samples", "Follow the trainer without leaving the control room."))
-                        training_progress = gr.Slider(0, 1, value=0, label="Progress", interactive=False)
-                        with gr.Row(equal_height=False):
-                            training_logs = gr.Textbox(label="Live log", lines=18, max_lines=30, interactive=False, elem_classes=["console"])
-                            samples = gr.Gallery(label="Validation samples", columns=2, height=430, object_fit="cover")
-
-                with gr.Tab("Core ML export", id="coreml"):
-                    with gr.Row(equal_height=False):
-                        with gr.Column(scale=7, elem_classes=["section-card"]):
-                            gr.HTML(section_heading("Step 1", "Choose local inputs", "The base stays shared; the selected LoRA defines the runtime state shapes."))
-                            model_dir = gr.Textbox(
-                                value="/path/to/Clover-Image-Tiny",
-                                label="Clover model folder",
-                                info="Local Diffusers checkout containing model_index.json",
-                            )
-                            style_file = gr.Textbox(
-                                value="outputs/monet-lora/pytorch_lora_weights.safetensors",
-                                label="Style .safetensors",
-                                info="A compatible Clover LoRA produced by the training workspace",
-                            )
-                            coreml_output_dir = gr.Textbox(
-                                value="coreml-models/clover-stateful",
-                                label="Core ML output folder",
-                            )
-                            with gr.Row():
-                                coreml_action = gr.Radio(
-                                    COREML_ACTIONS,
-                                    value=COREML_ACTIONS[0],
-                                    label="Workflow step",
-                                )
-                                minimum_psnr = gr.Number(value=35.0, label="Minimum PSNR", precision=1)
-                        with gr.Column(scale=5, elem_classes=["section-card"]):
-                            gr.HTML(section_heading("Step 2", "Preflight", "Check tools, inputs, generated artifacts, and free disk space."))
-                            readiness = gr.HTML(status_card("Not checked yet", "Choose your paths, then run the readiness check."))
-                            readiness_button = gr.Button("Check readiness", elem_classes=["secondary-action"])
-                            artifacts = gr.HTML(coreml_artifacts("coreml-models/clover-stateful"))
-
-                    with gr.Row(equal_height=False):
-                        with gr.Column(scale=7, elem_classes=["section-card"]):
-                            gr.HTML(section_heading("Step 3", "Review the operation", "The GUI calls the pinned, reproducible conversion tools in this repository."))
-                            coreml_command_preview = gr.Textbox(
-                                label="Command preview", lines=7, interactive=False, elem_classes=["command-box"]
-                            )
-                            preview_coreml_button = gr.Button("Preview command")
-                            with gr.Row():
-                                run_coreml_button = gr.Button("Run selected step", variant="primary", elem_classes=["primary-action"])
-                                stop_coreml_button = gr.Button("Stop", variant="stop", elem_classes=["secondary-action"])
-                        with gr.Column(scale=5, elem_classes=["section-card"]):
-                            gr.HTML(section_heading("Architecture", "One base, many styles", "Stateful export replaces the old 648 MB-per-style model copies."))
-                            gr.HTML(
-                                """<div class="metric-row">
-                                <div class="metric"><strong>~1.5 GB</strong><span>shared Core ML base</span></div>
-                                <div class="metric"><strong>144</strong><span>LoRA state tensors</span></div>
-                                <div class="metric"><strong>~6.9 MB</strong><span>each rank-16 style</span></div>
-                                </div>
-                                <div class="quiet-card"><strong>Three deliberate steps</strong><br>
-                                Export the stateful U-Net, compile it for Xcode, then validate base and style parity at 35 dB or better.</div>"""
-                            )
-
-                    with gr.Column(elem_classes=["section-card"]):
-                        gr.HTML(section_heading("Live conversion", "Progress and diagnostics", "Long downloads and conversion stages stream here in real time."))
-                        coreml_status = gr.HTML(status_card("Ready", "Run the readiness check before exporting."))
-                        coreml_run_progress = gr.Slider(0, 1, value=0, label="Progress", interactive=False)
-                        coreml_logs = gr.Textbox(label="Core ML log", lines=20, max_lines=32, interactive=False, elem_classes=["console"])
-
-                with gr.Tab("Quick guide", id="guide"):
-                    with gr.Row(equal_height=False):
-                        with gr.Column(elem_classes=["section-card"]):
-                            gr.HTML(section_heading("Training", "A safe first run", "Prove the full path with five steps before committing GPU time."))
-                            gr.Markdown(
-                                """
-1. Pick a recipe and load its dataset preview.
-2. Keep **5-step smoke test** selected.
-3. Preview the command, then start training.
-4. Inspect the log and four validation samples.
-5. Switch to **Full training** only after the smoke test succeeds.
-                                """
-                            )
-                        with gr.Column(elem_classes=["section-card"]):
-                            gr.HTML(section_heading("Core ML", "From weights to iPhone", "Export one stateful base and keep every style as a small named file."))
-                            gr.Markdown(
-                                """
-1. Select the local Clover Diffusers folder and one trained style.
-2. Run **Export stateful U-Net**.
-3. Run **Compile for Xcode** against the same output folder.
-4. Run **Validate parity** and require at least 35 dB.
-5. Copy the compiled base and state schema to the iOS catalog; distribute styles separately.
-                                """
-                            )
-
-            gr.HTML('<div class="footer-note">Apache-2.0 tools · CreativeML Open RAIL-M model derivatives · localhost by default</div>')
-
-        training_fields = [
-            style,
-            dataset,
-            trigger,
-            validation_prompt,
-            output_dir,
-            max_steps,
-            rank,
-            learning_rate,
-            batch_size,
-            accumulation,
-            mixed_precision,
-            checkpoint_steps,
-            seed,
-            hub_model_id,
-        ]
-        config_name.change(config_values, config_name, training_fields)
-        preview_button.click(preview_dataset, dataset, [preview_status, preview_gallery])
-        preview_command_button.click(
-            preview_training_command,
-            [base_model, mode, push_to_hub, *training_fields],
-            training_command_preview,
-        )
-        run_button.click(
-            training_updates,
-            [base_model, mode, push_to_hub, *training_fields],
-            [training_status, training_progress, training_logs, samples],
-            concurrency_limit=1,
-        )
-        stop_training_button.click(stop_active_process, outputs=training_status, queue=False)
-
-        coreml_fields = [
-            coreml_action,
-            model_dir,
-            style_file,
-            coreml_output_dir,
-            minimum_psnr,
-        ]
-        readiness_button.click(coreml_readiness, coreml_fields, readiness)
-        preview_coreml_button.click(
-            preview_coreml_command, coreml_fields, coreml_command_preview
-        )
-        run_coreml_button.click(
-            coreml_updates,
-            coreml_fields,
-            [coreml_status, coreml_run_progress, coreml_logs, artifacts],
-            concurrency_limit=1,
-        )
-        stop_coreml_button.click(stop_active_process, outputs=coreml_status, queue=False)
-        coreml_action.change(coreml_readiness, coreml_fields, readiness)
-        coreml_output_dir.change(coreml_artifacts, coreml_output_dir, artifacts)
-
-    return demo
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+            self.process_thread.stop()
+            self.process_thread.wait(3000)
+        event.accept()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=7860)
-    parser.add_argument("--share", action="store_true")
+    parser.add_argument("--tab", choices=("training", "coreml"), default="training")
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="show the bundled local dataset in the preview on startup",
+    )
     args = parser.parse_args()
 
-    build_gui().queue(default_concurrency_limit=1).launch(
-        server_name=args.host,
-        server_port=args.port,
-        share=args.share,
-        theme=studio_theme(),
-        css=CSS,
-    )
+    app = QApplication(sys.argv[:1])
+    app.setApplicationName("Clover Image Tiny LoRA Trainer")
+    window = CloverTrainerWindow(selected_tab=args.tab, demo=args.demo)
+    window.show()
+    window.raise_()
+    window.activateWindow()
+    raise SystemExit(app.exec())
 
 
 if __name__ == "__main__":

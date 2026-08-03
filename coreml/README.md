@@ -1,7 +1,7 @@
-# Core ML export workspace
+# Core ML export
 
-Clover Studio provides a complete GUI for creating and validating the shared
-stateful Core ML U-Net used by the iPhone app.
+Clover's native Python desktop app provides a complete GUI for creating and
+validating the shared stateful Core ML U-Net used by the iPhone app.
 
 ```text
 Shared Core ML pipeline (~1.5 GB)
@@ -23,7 +23,8 @@ source .venv/bin/activate
 python trainer_gui.py
 ```
 
-Open `http://127.0.0.1:7860`, then select **Core ML export**.
+Select the **Core ML** tab in the desktop window. It uses standard native
+controls and file pickers; no browser or local web server is involved.
 
 <p align="center">
   <img src="../assets/gui-coreml.png" alt="Core ML export workspace" width="1200">
