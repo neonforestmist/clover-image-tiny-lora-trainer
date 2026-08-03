@@ -1,125 +1,60 @@
-# Core ML export
+# Core ML style packaging
 
-Clover's native Python desktop app provides a complete GUI for creating and
-validating the shared stateful Core ML U-Net used by the iPhone app.
-
-```text
-Shared Core ML pipeline (~1.5 GB)
-             +
-Named style.safetensors (~6.9 MB at rank 16)
-             ↓
-iOS writes 144 LoRA tensors into MLState
-```
-
-The large base is installed once. Monet, Pointillism, Watercolor Anime, and
-user-imported compatible styles stay as small independent files.
-
-## Use the GUI
-
-From the repository root:
-
-```bash
-source .venv/bin/activate
-python trainer_gui.py
-```
-
-Select the **Core ML** tab in the desktop window. It uses standard native
-controls and file pickers; no browser or local web server is involved.
-
-<p align="center">
-  <img src="../assets/gui-coreml.png" alt="Core ML model workspace" width="1200">
-</p>
-
-The default view has one short workflow:
-
-1. Choose the Clover model folder.
-2. Choose a compatible `.safetensors` style file.
-3. Choose an output folder.
-4. Select **Save Core ML model**.
-
-Open **Show technical details** only when you need preflight results,
-compilation, validation, command output, logs, or generated artifacts.
-
-### Choose local inputs
-
-- **Clover model folder** — a local Diffusers checkpoint containing
-  `model_index.json`.
-- **Style .safetensors** — a compatible Clover LoRA. It defines tensor names
-  and shapes; exported state values still start at zero.
-- **Core ML output folder** — where the package and schema should be written.
-
-### Check readiness
-
-The app checks macOS, Python 3.11, Xcode command-line tools, the chosen model
-and style, generated artifacts, and available disk space when you save. The
-same results are visible under **Show technical details**.
-
-### Optional follow-up steps
-
-1. **Create Core ML model** creates `Unet.mlpackage` and
-   `coreml-state-schema.json`.
-2. **Compile for Xcode** invokes `xcrun coremlcompiler` and writes compiled
-   resources under `compiled/`.
-3. **Validate parity** runs deterministic base and styled inputs through
-   PyTorch and Core ML. Both PSNR results must meet the 35 dB default.
-
-Compilation and validation are selected under **Show technical details**. Every
-action keeps a command preview, live progress, streamed logs, cancellation, and
-an artifact summary. The GUI calls the same scripts documented below.
-
-## Equivalent command line
-
-### Export
-
-```bash
-./coreml/export_stateful.sh \
-  /path/to/Clover-Image-Tiny \
-  coreml-models/clover-stateful \
-  /path/to/Monet.safetensors
-```
-
-The script checks out Apple’s converter at the repository’s pinned revision,
-applies Clover’s no-middle-block patch, creates an isolated Python environment,
-and saves a batch-one model so classifier-free guidance runs serially with a
-lower peak-memory footprint:
-
-- `Unet.mlpackage` — the iOS 18 stateful Core ML U-Net;
-- `coreml-state-schema.json` — the Diffusers-key to Core ML-state mapping.
-
-### Compile
-
-```bash
-xcrun coremlcompiler compile \
-  coreml-models/clover-stateful/Unet.mlpackage \
-  coreml-models/clover-stateful/compiled
-```
-
-### Validate
-
-```bash
-.venv-coreml/bin/python coreml/validate_stateful_lora.py \
-  --model-version /path/to/Clover-Image-Tiny \
-  --coreml-model coreml-models/clover-stateful/Unet.mlpackage \
-  --adapter-schema coreml-models/clover-stateful/coreml-state-schema.json \
-  --lora-weights /path/to/Monet.safetensors \
-  --minimum-psnr 35
-```
-
-Validate at least one style from every training configuration before
-publishing a new shared base.
-
-## Tooling map
+Clover installs one shared stateful Core ML pipeline on iPhone. A trained
+rank-16 LoRA remains a small independent style file; it does not need another
+copy of the roughly 618 MB U-Net.
 
 ```text
-coreml/
-├── export_stateful.sh              # current iOS 18 entry point
-├── convert_stateful_lora_unet.py   # inject and export MLState buffers
-├── validate_stateful_lora.py       # base/style PyTorch ↔ Core ML parity
-├── constraints.txt                 # pinned converter environment
-└── apple-no-mid-block.patch        # Clover converter compatibility
+Shared Clover Core ML model (~1.5 GB, installed once)
+                         +
+Named style.safetensors (~6.9 MB)
+                         ↓
+            144 Core ML MLState tensors
 ```
+
+## Use the desktop app
+
+Open `trainer_gui.py`, select **Core ML**, and choose only:
+
+1. the trained `pytorch_lora_weights.safetensors` file;
+2. the output folder.
+
+Select **Create Core ML style**. The output matches Clover's published Monet,
+Pointillism, and Watercolor Anime Core ML repositories:
+
+```text
+storybook-anime-coreml/
+├── Storybook-Anime.safetensors
+├── coreml-state-schema.json
+├── README.md
+├── LICENSE
+└── .gitattributes
+```
+
+The packager validates all 72 LoRA target pairs and the rank-16 shape expected
+by the iOS model. Diffusers `lora_A` and `lora_B` tensors are renamed to the
+`lora.down` and `lora.up` names consumed by Clover. The tensor data is not fused
+into the base model and is not expanded into a large per-style U-Net.
+
+## Command line
+
+The GUI calls the same small script directly:
+
+```bash
+python coreml/package_style.py \
+  outputs/my-style-lora/pytorch_lora_weights.safetensors \
+  coreml-models/my-style-coreml
+```
+
+This packaging step works on macOS and Windows and does not require Xcode.
+
+## Shared-base development tools
+
+The other scripts in this folder build and validate Clover's shared stateful
+U-Net. They are base-model development tools, not part of the normal per-style
+workflow exposed by the desktop app.
 
 ## Licensing
 
-The conversion code is Apache-2.0. Converted model weights and style files are
-derivatives of Clover Image Tiny and remain under CreativeML Open RAIL-M.
+Packaging code is Apache-2.0. The generated style weights and included model
+license use CreativeML Open RAIL-M.

@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
+import shutil
 import subprocess
 import sys
 import urllib.request
@@ -43,6 +45,23 @@ TRAINER_URL = (
 
 BASE_MODEL = "neonforestmist/Clover-Image-Tiny"
 SEED = 20260730
+
+
+def accelerate_command() -> list[str]:
+    """Run Accelerate from this trainer's environment, never another install."""
+    candidates = [
+        ROOT / ".venv" / "bin" / "accelerate",
+        ROOT / ".venv" / "Scripts" / "accelerate.exe",
+        Path(sys.executable).resolve().parent / "accelerate",
+        Path(sys.executable).resolve().parent / "accelerate.exe",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return [str(candidate)]
+    executable = shutil.which("accelerate")
+    if executable:
+        return [executable]
+    return [sys.executable, "-m", "accelerate.commands.accelerate_cli"]
 
 
 def load_config(path: Path) -> dict:
@@ -78,9 +97,22 @@ def build_command(
     steps = 5 if smoke else int(config.get("max_train_steps", 1000))
     warmup = 0 if smoke else int(config.get("warmup_steps", 100))
 
-    command = [
-        "accelerate",
+    workers = int(config.get("dataloader_num_workers", 2))
+    # Diffusers defines its image preprocessing closure inside main(). Python's
+    # spawn mode on macOS cannot pickle that closure for worker processes.
+    if platform.system() == "Darwin":
+        workers = 0
+
+    command = accelerate_command() + [
         "launch",
+        "--num_processes",
+        "1",
+        "--num_machines",
+        "1",
+        "--mixed_precision",
+        "no",
+        "--dynamo_backend",
+        "no",
         str(trainer),
         "--pretrained_model_name_or_path",
         base_model,
@@ -112,7 +144,7 @@ def build_command(
         "--mixed_precision",
         config.get("mixed_precision", "fp16"),
         "--dataloader_num_workers",
-        str(config.get("dataloader_num_workers", 2)),
+        str(workers),
         "--seed",
         str(config.get("seed", SEED)),
         "--output_dir",
@@ -121,13 +153,30 @@ def build_command(
         str(config.get("checkpointing_steps", 250)),
         "--checkpoints_total_limit",
         "2",
-        "--validation_prompt",
-        config["validation_prompt"],
-        "--num_validation_images",
-        "4",
         "--report_to",
         "tensorboard",
     ]
+
+    # Rebuilding the full inference pipeline every epoch can push an Apple
+    # Silicon machine into many gigabytes of swap. Keep the training process
+    # bounded on macOS; preview generation can run separately after training.
+    validation_enabled = bool(
+        config.get("enable_validation", platform.system() != "Darwin")
+    )
+    if validation_enabled:
+        command += [
+            "--validation_prompt",
+            config["validation_prompt"],
+            "--num_validation_images",
+            "4",
+        ]
+
+    resume = config.get("resume_from_checkpoint")
+    output_path = Path(output_dir).expanduser()
+    if not smoke and resume is None and output_path.is_dir():
+        resume = "latest" if any(output_path.glob("checkpoint-*")) else None
+    if not smoke and resume:
+        command += ["--resume_from_checkpoint", str(resume)]
 
     # A local imagefolder dataset needs `--train_data_dir`; a Hub id uses
     # `--dataset_name` (already added above).

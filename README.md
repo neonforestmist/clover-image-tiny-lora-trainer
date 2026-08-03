@@ -2,7 +2,7 @@
 
 A native Python desktop application for training compact style LoRAs for
 [`neonforestmist/Clover-Image-Tiny`](https://huggingface.co/neonforestmist/Clover-Image-Tiny)
-and saving its stateful Core ML U-Net.
+and packaging those styles for Clover's shared stateful Core ML U-Net.
 
 The interface is built with Qt through PySide6. It opens as an ordinary desktop
 window, uses the operating system's standard controls and file pickers, and does
@@ -18,8 +18,8 @@ instead of downloading another roughly 648 MB U-Net.
 
 ## Start the desktop app
 
-Training works on macOS and Windows with Python 3.11 or 3.12. Creating Core ML models
-requires macOS and Xcode; the **Core ML** tab cannot run on Windows.
+Training and Core ML style packaging work on macOS and Windows with Python
+3.11 or 3.12.
 The commands below use Python 3.11; substitute 3.12 in the versioned command if
 that is the version you installed.
 
@@ -41,8 +41,7 @@ python -m pip install -r requirements.txt
 python trainer_gui.py
 ```
 
-The standard PyTorch package supports Apple Silicon through MPS. Creating Core ML models
-also needs Xcode and its command-line tools.
+The standard PyTorch package supports Apple Silicon through MPS.
 
 ### Windows
 
@@ -81,9 +80,13 @@ Every valid metadata row is loaded; a
 
 The app derives the style name from the folder name, checks that the chosen
 trigger starts every caption, uses Clover's standard rank-16 settings, and
-saves the result under `outputs/<folder-name>-lora`. Logs and generated samples
-are available under **Show log and samples**, but there are no additional
-training inputs.
+saves the result under `outputs/<folder-name>-lora`. Logs are available under
+**Show log and samples**, but there are no additional training inputs. If a run
+is interrupted, selecting **Train style** again resumes its latest checkpoint.
+
+On macOS, inline epoch image previews are disabled because repeatedly loading
+the complete inference pipeline can exhaust unified memory and swap. This does
+not change the trained style weights.
 
 ### Published recipes
 
@@ -102,22 +105,24 @@ frozen.
 
 ## Core ML workspace
 
-Core ML conversion is part of the same application—no shell-only handoff is
-required.
+Core ML style packaging is part of the same application—no shell-only handoff
+is required and the shared 1.5 GB model is not rebuilt for every style.
 
 <p align="center">
   <img src="assets/gui-coreml.png" alt="Native Clover Core ML model window" width="1200">
 </p>
 
-The **Core ML** tab asks for the Clover model folder, one `.safetensors` style,
-and an output folder. Select **Save Core ML model** to begin. Preflight checks,
-compilation, parity validation, command output, logs, and artifact inspection
-are available under **Show technical details**.
+The **Core ML** tab has two paths: the trained `.safetensors` file and the
+output folder. Select **Create Core ML style**. The result matches the existing
+Monet, Pointillism, and Watercolor Anime Core ML repositories:
 
-Creating the stateful model requires macOS, Xcode command-line tools, Python 3.11, and
-iOS 18 or newer at runtime. Keep at least 15 GB free while building the
-converter environment and model package. The application warns below 15 GB and
-blocks on missing required inputs.
+- a named rank-16 `.safetensors` style (about 6.9 MB);
+- `coreml-state-schema.json` for the 144 iOS `MLState` tensors;
+- a Hugging Face-ready README, model license, and LFS attributes.
+
+The packager converts Diffusers `lora_A`/`lora_B` names to Clover's
+`lora.down`/`lora.up` runtime names and validates every tensor pair. It does not
+need Xcode and works on Windows as well as macOS.
 
 See [`coreml/README.md`](coreml/README.md) for the artifact contract, the
 equivalent CLI commands, and validation instructions.
@@ -204,7 +209,7 @@ clover-image-tiny-lora-trainer/
 ├── data/                   # format guide and sample imagefolder
 ├── assets/                 # style examples and real GUI screenshots
 ├── tests/                  # command and workflow checks
-└── coreml/                 # stateful export, compilation, and validation
+└── coreml/                 # compact iOS style packager and shared-base tools
 ```
 
 ## Ecosystem

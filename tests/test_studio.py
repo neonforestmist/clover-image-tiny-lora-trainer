@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import trainer_core as studio
+from safetensors.torch import load_file, save_file
+import torch
 
 
 class CloverStudioTests(unittest.TestCase):
@@ -91,6 +95,77 @@ class CloverStudioTests(unittest.TestCase):
         self.assertIn("--max_train_steps 5", command)
         self.assertIn("--max_train_samples 4", command)
         self.assertNotIn("--push_to_hub", command)
+
+    def test_macos_training_uses_zero_workers_and_project_accelerate(self) -> None:
+        values = studio.local_training_values("data/example-monet")
+        config = studio.make_config(values)
+        with patch("train_lora.platform.system", return_value="Darwin"):
+            command = studio.training_command(
+                config,
+                studio.train_lora.BASE_MODEL,
+                "5-step smoke test",
+                False,
+                fetch=False,
+            )
+
+        worker_index = command.index("--dataloader_num_workers")
+        self.assertEqual(command[worker_index + 1], "0")
+        self.assertNotEqual(command[0], "accelerate")
+        self.assertEqual(command[command.index("--num_processes") + 1], "1")
+        self.assertNotIn("--validation_prompt", command)
+
+    def test_full_training_resumes_latest_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "style-lora"
+            (output / "checkpoint-500").mkdir(parents=True)
+            values = studio.local_training_values("data/example-monet")
+            values["output_dir"] = str(output)
+            command = studio.training_command(
+                studio.make_config(values),
+                studio.train_lora.BASE_MODEL,
+                "Full training",
+                False,
+                fetch=False,
+            )
+
+        resume_index = command.index("--resume_from_checkpoint")
+        self.assertEqual(command[resume_index + 1], "latest")
+
+    def test_coreml_style_package_matches_ios_repository_layout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "pytorch_lora_weights.safetensors"
+            tensors = {}
+            for index in range(72):
+                prefix = f"unet.block_{index}.to_q"
+                tensors[f"{prefix}.lora_A.weight"] = torch.zeros(16, 32)
+                tensors[f"{prefix}.lora_B.weight"] = torch.zeros(32, 16)
+            save_file(tensors, source, metadata={"format": "pt"})
+            output = root / "storybook-anime-coreml"
+
+            subprocess.run(
+                studio.coreml_style_command(str(source), str(output)),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            weights = output / "Storybook-Anime.safetensors"
+            schema = json.loads(
+                (output / "coreml-state-schema.json").read_text()
+            )
+            packaged = load_file(str(weights), device="cpu")
+            model_card = (output / "README.md").read_text()
+
+            self.assertEqual(len(packaged), 144)
+            self.assertIn("unet.block_0.to_q.lora.down.weight", packaged)
+            self.assertNotIn("unet.block_0.to_q.lora_A.weight", packaged)
+            self.assertEqual(schema["state_count"], 144)
+            self.assertEqual(schema["states"][0]["shape"][-2:], [1, 1])
+            self.assertIn("pipeline_tag: text-to-image", model_card)
+            self.assertIn("Clover-Image-Tiny-CoreML", model_card)
+            self.assertTrue((output / "LICENSE").is_file())
+            self.assertTrue((output / ".gitattributes").is_file())
 
     def test_coreml_preview_is_copyable_and_machine_independent(self) -> None:
         command = studio.coreml_preview(

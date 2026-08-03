@@ -8,6 +8,7 @@ import platform
 import re
 import shlex
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -95,7 +96,12 @@ def make_config(values: dict[str, Any]) -> dict[str, Any]:
         "checkpointing_steps": int(values["checkpointing_steps"]),
         "warmup_steps": max(steps // 10, 0),
         "snr_gamma": 5.0,
-        "dataloader_num_workers": 2,
+        "dataloader_num_workers": int(
+            values.get(
+                "dataloader_num_workers",
+                0 if platform.system() == "Darwin" else 2,
+            )
+        ),
         "seed": int(values["seed"]),
         "hub_model_id": str(values.get("hub_model_id", "")).strip(),
     }
@@ -233,6 +239,7 @@ def local_training_values(
         "gradient_accumulation_steps": 1,
         "mixed_precision": "fp16",
         "checkpointing_steps": 250,
+        "dataloader_num_workers": 0 if platform.system() == "Darwin" else 2,
         "seed": train_lora.SEED,
         "hub_model_id": "",
     }
@@ -422,3 +429,70 @@ def coreml_progress(line: str, current: int) -> int:
         if marker in lowered:
             current = max(current, progress)
     return current
+
+
+def coreml_style_command(style_file: str, output_dir: str) -> list[str]:
+    style = resolve_path(style_file)
+    output = resolve_path(output_dir)
+    return [
+        sys.executable,
+        str(COREML_DIR / "package_style.py"),
+        str(style),
+        str(output),
+    ]
+
+
+def coreml_style_preview(style_file: str, output_dir: str) -> str:
+    return display_command(coreml_style_command(style_file, output_dir))
+
+
+def coreml_style_requirements(
+    style_file: str,
+    output_dir: str,
+) -> list[Requirement]:
+    style = resolve_path(style_file)
+    output = resolve_path(output_dir)
+    requirements: list[Requirement] = []
+    style_ok = style.is_file() and style.suffix.casefold() == ".safetensors"
+    requirements.append(
+        Requirement(
+            "Trained style",
+            "Ready" if style_ok else "Missing",
+            (
+                f"{style.name} · {format_bytes(style.stat().st_size)}"
+                if style_ok
+                else "Choose a trained Clover .safetensors file"
+            ),
+        )
+    )
+    parent = next(
+        (candidate for candidate in (output, *output.parents) if candidate.exists()),
+        None,
+    )
+    writable = parent is not None and os.access(parent, os.W_OK)
+    requirements.append(
+        Requirement(
+            "Output folder",
+            "Ready" if writable else "Missing",
+            str(output) if writable else "Choose a writable output folder",
+        )
+    )
+    return requirements
+
+
+def coreml_style_artifacts(output_dir: str) -> list[Artifact]:
+    output = resolve_path(output_dir)
+    if not output.is_dir():
+        return []
+    candidates = [
+        *sorted(output.glob("*.safetensors")),
+        output / "coreml-state-schema.json",
+        output / "README.md",
+        output / "LICENSE",
+        output / ".gitattributes",
+    ]
+    artifacts = []
+    for path in candidates:
+        if path.is_file():
+            artifacts.append(Artifact(path.name, format_bytes(path.stat().st_size), path))
+    return artifacts

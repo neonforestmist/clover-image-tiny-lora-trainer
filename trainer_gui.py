@@ -15,8 +15,6 @@ from PySide6.QtGui import QAction, QCloseEvent, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
-    QComboBox,
-    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -104,8 +102,8 @@ class CloverTrainerWindow(QMainWindow):
     def __init__(self, *, selected_tab: str = "training", demo: bool = False) -> None:
         super().__init__()
         self.setWindowTitle("Clover LoRA Trainer")
-        self.resize(900, 760)
-        self.setMinimumSize(760, 600)
+        self.resize(1240, 820)
+        self.setMinimumSize(1040, 650)
 
         self.process_thread: ProcessThread | None = None
         self.preview_thread: DatasetPreviewThread | None = None
@@ -179,14 +177,14 @@ class CloverTrainerWindow(QMainWindow):
         form = QFormLayout()
         form.setVerticalSpacing(10)
         self.dataset_edit = QLineEdit()
-        self.dataset_edit.setMinimumWidth(520)
+        self.dataset_edit.setMinimumWidth(780)
         self.dataset_edit.setPlaceholderText("my-style/ (contains images/ and metadata.jsonl)")
         form.addRow(
             "Dataset folder",
             self._path_row(self.dataset_edit, self._choose_dataset_folder, "Choose folder…"),
         )
         self.trigger_edit = QLineEdit()
-        self.trigger_edit.setMinimumWidth(520)
+        self.trigger_edit.setMinimumWidth(780)
         self.trigger_edit.setPlaceholderText("e.g. Storybook Anime Style")
         form.addRow("Trigger phrase", self.trigger_edit)
         layout.addLayout(form)
@@ -264,34 +262,31 @@ class CloverTrainerWindow(QMainWindow):
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(12)
 
-        layout.addWidget(self._heading("Save a Core ML model"))
+        layout.addWidget(self._heading("Create an iPhone Core ML style"))
         intro = QLabel(
-            "Choose the Clover model, one style file, and a folder for the saved Core ML model."
+            "Choose the trained LoRA and an output folder. Clover creates the same "
+            "small style package used by the published iOS style repositories."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
         form = QFormLayout()
         form.setVerticalSpacing(10)
-        self.model_dir_edit = QLineEdit("/path/to/Clover-Image-Tiny")
-        self.model_dir_edit.setCursorPosition(0)
-        form.addRow(
-            "Clover model",
-            self._path_row(self.model_dir_edit, self._choose_model_folder, "Choose folder…"),
-        )
         self.style_file_edit = QLineEdit()
+        self.style_file_edit.setMinimumWidth(780)
         self.style_file_edit.setPlaceholderText(
             "outputs/my-style-lora/pytorch_lora_weights.safetensors"
         )
         self.style_file_edit.setCursorPosition(0)
         form.addRow(
-            "Style file",
+            "Trained style",
             self._path_row(self.style_file_edit, self._choose_style_file, "Choose file…"),
         )
-        self.coreml_output_edit = QLineEdit("coreml-models/clover-stateful")
+        self.coreml_output_edit = QLineEdit("coreml-models/my-style-coreml")
+        self.coreml_output_edit.setMinimumWidth(780)
         self.coreml_output_edit.setCursorPosition(0)
         form.addRow(
-            "Save Core ML to",
+            "Output folder",
             self._path_row(
                 self.coreml_output_edit,
                 self._choose_coreml_output,
@@ -301,7 +296,7 @@ class CloverTrainerWindow(QMainWindow):
         layout.addLayout(form)
 
         buttons = QHBoxLayout()
-        self.coreml_start_button = QPushButton("Save Core ML model")
+        self.coreml_start_button = QPushButton("Create Core ML style")
         self.coreml_start_button.clicked.connect(self._start_coreml)
         self.coreml_stop_button = QPushButton("Stop")
         self.coreml_stop_button.setEnabled(False)
@@ -314,12 +309,12 @@ class CloverTrainerWindow(QMainWindow):
         self.coreml_progress = QProgressBar()
         self.coreml_progress.setRange(0, 100)
         self.coreml_progress.setValue(0)
-        self.coreml_status = QLabel("Choose the three paths, then save the model.")
+        self.coreml_status = QLabel("Choose the two paths, then create the style.")
         self.coreml_status.setWordWrap(True)
         layout.addWidget(self.coreml_progress)
         layout.addWidget(self.coreml_status)
 
-        self.coreml_details_button = self._details_button("technical details")
+        self.coreml_details_button = self._details_button("log and outputs")
         self.coreml_details_button.toggled.connect(self._toggle_coreml_details)
         layout.addWidget(self.coreml_details_button)
 
@@ -334,27 +329,6 @@ class CloverTrainerWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 2, 0, 0)
         layout.setSpacing(10)
-
-        settings = QFormLayout()
-        self.coreml_action_combo = QComboBox()
-        self.coreml_action_combo.addItems(core.COREML_ACTIONS)
-        settings.addRow("Task", self.coreml_action_combo)
-        self.psnr_spin = QDoubleSpinBox()
-        self.psnr_spin.setRange(1, 100)
-        self.psnr_spin.setDecimals(1)
-        self.psnr_spin.setValue(35.0)
-        settings.addRow("Minimum PSNR", self.psnr_spin)
-        layout.addLayout(settings)
-
-        self.check_requirements_button = QPushButton("Refresh checks")
-        self.check_requirements_button.clicked.connect(self._check_coreml_requirements)
-        layout.addWidget(self.check_requirements_button)
-        self.requirements_tree = QTreeWidget()
-        self.requirements_tree.setHeaderLabels(["Requirement", "Status", "Details"])
-        self.requirements_tree.setRootIsDecorated(False)
-        self.requirements_tree.setAlternatingRowColors(True)
-        self.requirements_tree.setMinimumHeight(150)
-        layout.addWidget(self.requirements_tree)
 
         self.coreml_preview_button = QPushButton("Refresh command preview")
         self.coreml_preview_button.clicked.connect(self._preview_coreml_command)
@@ -379,9 +353,6 @@ class CloverTrainerWindow(QMainWindow):
         self.refresh_artifacts_button.clicked.connect(self._refresh_artifacts)
         layout.addWidget(self.refresh_artifacts_button)
 
-        self.coreml_action_combo.currentTextChanged.connect(
-            self._coreml_action_changed
-        )
         return panel
 
     @staticmethod
@@ -428,11 +399,10 @@ class CloverTrainerWindow(QMainWindow):
             self.coreml_details_button,
             self.coreml_advanced,
             shown,
-            "technical details",
+            "log and outputs",
         )
         if shown:
             self._preview_coreml_command()
-            self._check_coreml_requirements()
             self._refresh_artifacts()
 
     @staticmethod
@@ -442,6 +412,7 @@ class CloverTrainerWindow(QMainWindow):
         button_title: str,
     ) -> QWidget:
         row = QWidget()
+        row.setMinimumWidth(900)
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         button = QPushButton(button_title)
@@ -473,7 +444,6 @@ class CloverTrainerWindow(QMainWindow):
     def _tab_changed(self, index: int) -> None:
         if self.tabs.widget(index) is self.coreml_tab:
             for edit in (
-                self.model_dir_edit,
                 self.style_file_edit,
                 self.coreml_output_edit,
             ):
@@ -484,9 +454,6 @@ class CloverTrainerWindow(QMainWindow):
         self._choose_directory(self.dataset_edit, "Choose training images")
         if self.dataset_edit.text():
             self._load_dataset_preview()
-
-    def _choose_model_folder(self) -> None:
-        self._choose_directory(self.model_dir_edit, "Choose Clover model")
 
     def _choose_coreml_output(self) -> None:
         self._choose_directory(self.coreml_output_edit, "Choose Core ML output")
@@ -633,48 +600,26 @@ class CloverTrainerWindow(QMainWindow):
             status=self.training_status,
         )
 
-    def _coreml_action_changed(self, action: str) -> None:
-        labels = {
-            core.COREML_ACTIONS[0]: "Save Core ML model",
-            core.COREML_ACTIONS[1]: "Compile for Xcode",
-            core.COREML_ACTIONS[2]: "Validate model",
-        }
-        self.coreml_start_button.setText(labels.get(action, "Run"))
-        self._preview_coreml_command()
-        if self.coreml_advanced.isVisible():
-            self._check_coreml_requirements()
-
     def _coreml_requirements(self) -> list[core.Requirement]:
-        return core.coreml_requirements(
-            self.coreml_action_combo.currentText(),
-            self.model_dir_edit.text(),
+        return core.coreml_style_requirements(
             self.style_file_edit.text(),
             self.coreml_output_edit.text(),
         )
 
     def _check_coreml_requirements(self) -> None:
         requirements = self._coreml_requirements()
-        self.requirements_tree.clear()
-        for requirement in requirements:
-            QTreeWidgetItem(
-                self.requirements_tree,
-                [requirement.name, requirement.status, requirement.detail],
-            )
-        self.requirements_tree.resizeColumnToContents(0)
-        self.requirements_tree.resizeColumnToContents(1)
         missing = sum(item.status == "Missing" for item in requirements)
         self.coreml_status.setText(
-            "Ready to run." if missing == 0 else f"{missing} item(s) still need attention."
+            "Ready to create the Core ML style."
+            if missing == 0
+            else f"{missing} path(s) still need attention."
         )
 
     def _preview_coreml_command(self) -> None:
         try:
-            command = core.coreml_preview(
-                self.coreml_action_combo.currentText(),
-                self.model_dir_edit.text(),
+            command = core.coreml_style_preview(
                 self.style_file_edit.text(),
                 self.coreml_output_edit.text(),
-                self.psnr_spin.value(),
             )
             self.coreml_command_box.setPlainText(command)
         except Exception as error:  # noqa: BLE001 - keep main flow usable
@@ -693,12 +638,9 @@ class CloverTrainerWindow(QMainWindow):
                 "Choose or install these items first:\n\n" + "\n".join(missing),
             )
             return
-        command = core.coreml_command(
-            self.coreml_action_combo.currentText(),
-            self.model_dir_edit.text(),
+        command = core.coreml_style_command(
             self.style_file_edit.text(),
             self.coreml_output_edit.text(),
-            self.psnr_spin.value(),
         )
         self.coreml_command_box.setPlainText(core.display_command(command))
         self._start_process(
@@ -747,7 +689,9 @@ class CloverTrainerWindow(QMainWindow):
     def _process_completed(self, code: int) -> None:
         if self.active_status is not None:
             self.active_status.setText(
-                "Complete." if code == 0 else f"Stopped with exit code {code}."
+                "Complete."
+                if code == 0
+                else f"Failed with exit code {code}. Open the log for the exact error."
             )
         if code == 0 and self.active_progress is not None:
             self.active_progress.setValue(100)
@@ -756,8 +700,25 @@ class CloverTrainerWindow(QMainWindow):
                 (path, path.name) for path in core.sample_images(self.training_output_dir)
             ]
             self._populate_images(self.sample_gallery, samples, 116)
+            if code == 0:
+                weights = core.resolve_path(self.training_output_dir) / (
+                    "pytorch_lora_weights.safetensors"
+                )
+                if weights.is_file():
+                    self.style_file_edit.setText(str(weights))
+                    output_name = Path(self.training_output_dir).name.removesuffix("-lora")
+                    self.coreml_output_edit.setText(
+                        str(core.ROOT / "coreml-models" / f"{output_name}-coreml")
+                    )
+            else:
+                self.training_details.show()
+                self.training_details_button.setChecked(True)
+                self.training_output_tabs.setCurrentWidget(self.training_log)
         else:
             self._refresh_artifacts()
+            if code != 0:
+                self.coreml_advanced.show()
+                self.coreml_details_button.setChecked(True)
         self._set_process_buttons(running=False)
         if self.process_thread is not None:
             self.process_thread.deleteLater()
@@ -780,7 +741,7 @@ class CloverTrainerWindow(QMainWindow):
 
     def _refresh_artifacts(self) -> None:
         self.artifacts_tree.clear()
-        for artifact in core.coreml_artifacts(self.coreml_output_edit.text()):
+        for artifact in core.coreml_style_artifacts(self.coreml_output_edit.text()):
             QTreeWidgetItem(
                 self.artifacts_tree,
                 [artifact.name, artifact.detail, str(artifact.path)],
