@@ -27,7 +27,7 @@ Select the **Core ML** tab in the desktop window. It uses standard native
 controls and file pickers; no browser or local web server is involved.
 
 <p align="center">
-  <img src="../assets/gui-coreml.png" alt="Core ML export workspace" width="1200">
+  <img src="../assets/gui-coreml.png" alt="Core ML model workspace" width="1200">
 </p>
 
 The default view has one short workflow:
@@ -35,7 +35,7 @@ The default view has one short workflow:
 1. Choose the Clover model folder.
 2. Choose a compatible `.safetensors` style file.
 3. Choose an output folder.
-4. Select **Export for iPhone**.
+4. Select **Save Core ML model**.
 
 Open **Show technical details** only when you need preflight results,
 compilation, validation, command output, logs, or generated artifacts.
@@ -51,12 +51,12 @@ compilation, validation, command output, logs, or generated artifacts.
 ### Check readiness
 
 The app checks macOS, Python 3.11, Xcode command-line tools, the chosen model
-and style, generated artifacts, and available disk space when you export. The
+and style, generated artifacts, and available disk space when you save. The
 same results are visible under **Show technical details**.
 
 ### Optional follow-up steps
 
-1. **Export stateful U-Net** creates `Unet.mlpackage` and
+1. **Create Core ML model** creates `Unet.mlpackage` and
    `coreml-state-schema.json`.
 2. **Compile for Xcode** invokes `xcrun coremlcompiler` and writes compiled
    resources under `compiled/`.
@@ -80,7 +80,8 @@ an artifact summary. The GUI calls the same scripts documented below.
 
 The script checks out Apple’s converter at the repository’s pinned revision,
 applies Clover’s no-middle-block patch, creates an isolated Python environment,
-and exports:
+and saves a batch-one model so classifier-free guidance runs serially with a
+lower peak-memory footprint:
 
 - `Unet.mlpackage` — the iOS 18 stateful Core ML U-Net;
 - `coreml-state-schema.json` — the Diffusers-key to Core ML-state mapping.

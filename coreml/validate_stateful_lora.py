@@ -51,9 +51,23 @@ def main() -> None:
     reference.load_state_dict(pipeline.unet.state_dict())
     del pipeline
 
-    sample = torch.rand(2, 4, 64, 64)
-    timestep = torch.tensor([981.0, 981.0], dtype=torch.float32)
-    hidden_states = torch.rand(2, 768, 1, 77)
+    model = ct.models.MLModel(
+        str(args.coreml_model.resolve()),
+        compute_units=ct.ComputeUnit.CPU_AND_GPU,
+    )
+    input_specs = {
+        item.name: item for item in model.get_spec().description.input
+    }
+    sample_shape = tuple(
+        input_specs["sample"].type.multiArrayType.shape
+    )
+    hidden_shape = tuple(
+        input_specs["encoder_hidden_states"].type.multiArrayType.shape
+    )
+    batch_size = sample_shape[0]
+    sample = torch.rand(*sample_shape)
+    timestep = torch.full((batch_size,), 981.0, dtype=torch.float32)
+    hidden_states = torch.rand(*hidden_shape)
     inputs = {
         "sample": sample.numpy().astype(np.float16),
         "timestep": timestep.numpy().astype(np.float16),
@@ -63,10 +77,6 @@ def main() -> None:
     with torch.no_grad():
         base_reference = reference(sample, timestep, hidden_states)[0].numpy()
 
-    model = ct.models.MLModel(
-        str(args.coreml_model.resolve()),
-        compute_units=ct.ComputeUnit.CPU_AND_GPU,
-    )
     state = model.make_state()
     base_actual = model.predict(inputs, state=state)["noise_pred"]
     base_psnr = psnr(base_reference, base_actual)

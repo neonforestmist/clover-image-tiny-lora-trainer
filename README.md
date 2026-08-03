@@ -2,7 +2,7 @@
 
 A native Python desktop application for training compact style LoRAs for
 [`neonforestmist/Clover-Image-Tiny`](https://huggingface.co/neonforestmist/Clover-Image-Tiny)
-and exporting its stateful Core ML U-Net for iPhone.
+and saving its stateful Core ML U-Net.
 
 The interface is built with Qt through PySide6. It opens as an ordinary desktop
 window, uses the operating system's standard controls and file pickers, and does
@@ -18,7 +18,7 @@ instead of downloading another roughly 648 MB U-Net.
 
 ## Start the desktop app
 
-Training works on macOS and Windows with Python 3.11 or 3.12. Core ML export
+Training works on macOS and Windows with Python 3.11 or 3.12. Creating Core ML models
 requires macOS and Xcode; the **Core ML** tab cannot run on Windows.
 The commands below use Python 3.11; substitute 3.12 in the versioned command if
 that is the version you installed.
@@ -41,7 +41,7 @@ python -m pip install -r requirements.txt
 python trainer_gui.py
 ```
 
-The standard PyTorch package supports Apple Silicon through MPS. Core ML export
+The standard PyTorch package supports Apple Silicon through MPS. Creating Core ML models
 also needs Xcode and its command-line tools.
 
 ### Windows
@@ -73,12 +73,14 @@ localhost and there is no share mode.
 
 ## Training workspace
 
-The trainer asks for exactly one thing: a local dataset folder containing
-`images/` and `metadata.jsonl`. Select **Check dataset** to verify and preview
-it, then select **Train style**.
+Choose a local dataset folder containing `images/` and `metadata.jsonl`.
+The trainer fills an editable **Trigger phrase** from the first caption.
+Select **Check dataset** to verify and preview it, then select **Train style**.
+Every valid metadata row is loaded; a
+100-image folder reports and previews all 100 training pairs.
 
-The app derives the style name from the folder name, takes the validation prompt
-from the first metadata caption, uses Clover's standard rank-16 settings, and
+The app derives the style name from the folder name, checks that the chosen
+trigger starts every caption, uses Clover's standard rank-16 settings, and
 saves the result under `outputs/<folder-name>-lora`. Logs and generated samples
 are available under **Show log and samples**, but there are no additional
 training inputs.
@@ -104,15 +106,15 @@ Core ML conversion is part of the same application—no shell-only handoff is
 required.
 
 <p align="center">
-  <img src="assets/gui-coreml.png" alt="Native Clover Core ML export window" width="1200">
+  <img src="assets/gui-coreml.png" alt="Native Clover Core ML model window" width="1200">
 </p>
 
 The **Core ML** tab asks for the Clover model folder, one `.safetensors` style,
-and an output folder. Select **Export for iPhone** to begin. Preflight checks,
+and an output folder. Select **Save Core ML model** to begin. Preflight checks,
 compilation, parity validation, command output, logs, and artifact inspection
 are available under **Show technical details**.
 
-The stateful export requires macOS, Xcode command-line tools, Python 3.11, and
+Creating the stateful model requires macOS, Xcode command-line tools, Python 3.11, and
 iOS 18 or newer at runtime. Keep at least 15 GB free while building the
 converter environment and model package. The application warns below 15 GB and
 blocks on missing required inputs.

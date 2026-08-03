@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Simple native desktop app for Clover LoRA training and Core ML export."""
+"""Simple native desktop app for Clover LoRA training and Core ML creation."""
 
 from __future__ import annotations
 
@@ -171,7 +171,7 @@ class CloverTrainerWindow(QMainWindow):
         layout.addWidget(self._heading("Train a style"))
         intro = QLabel(
             "Choose one dataset folder containing images/ and metadata.jsonl. "
-            "Clover derives everything else automatically."
+            "Clover fills the trigger phrase from the captions; you can edit it before training."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -179,11 +179,16 @@ class CloverTrainerWindow(QMainWindow):
         form = QFormLayout()
         form.setVerticalSpacing(10)
         self.dataset_edit = QLineEdit()
+        self.dataset_edit.setMinimumWidth(520)
         self.dataset_edit.setPlaceholderText("my-style/ (contains images/ and metadata.jsonl)")
         form.addRow(
             "Dataset folder",
             self._path_row(self.dataset_edit, self._choose_dataset_folder, "Choose folder…"),
         )
+        self.trigger_edit = QLineEdit()
+        self.trigger_edit.setMinimumWidth(520)
+        self.trigger_edit.setPlaceholderText("e.g. Storybook Anime Style")
+        form.addRow("Trigger phrase", self.trigger_edit)
         layout.addLayout(form)
 
         self.training_destination = QLabel(
@@ -259,9 +264,9 @@ class CloverTrainerWindow(QMainWindow):
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(12)
 
-        layout.addWidget(self._heading("Prepare a style for iPhone"))
+        layout.addWidget(self._heading("Save a Core ML model"))
         intro = QLabel(
-            "Choose the Clover model, one style file, and where to save the Core ML output."
+            "Choose the Clover model, one style file, and a folder for the saved Core ML model."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -274,8 +279,9 @@ class CloverTrainerWindow(QMainWindow):
             "Clover model",
             self._path_row(self.model_dir_edit, self._choose_model_folder, "Choose folder…"),
         )
-        self.style_file_edit = QLineEdit(
-            "outputs/monet-lora/pytorch_lora_weights.safetensors"
+        self.style_file_edit = QLineEdit()
+        self.style_file_edit.setPlaceholderText(
+            "outputs/my-style-lora/pytorch_lora_weights.safetensors"
         )
         self.style_file_edit.setCursorPosition(0)
         form.addRow(
@@ -295,7 +301,7 @@ class CloverTrainerWindow(QMainWindow):
         layout.addLayout(form)
 
         buttons = QHBoxLayout()
-        self.coreml_start_button = QPushButton("Export for iPhone")
+        self.coreml_start_button = QPushButton("Save Core ML model")
         self.coreml_start_button.clicked.connect(self._start_coreml)
         self.coreml_stop_button = QPushButton("Stop")
         self.coreml_stop_button.setEnabled(False)
@@ -308,7 +314,7 @@ class CloverTrainerWindow(QMainWindow):
         self.coreml_progress = QProgressBar()
         self.coreml_progress.setRange(0, 100)
         self.coreml_progress.setValue(0)
-        self.coreml_status = QLabel("Choose the three paths, then export.")
+        self.coreml_status = QLabel("Choose the three paths, then save the model.")
         self.coreml_status.setWordWrap(True)
         layout.addWidget(self.coreml_progress)
         layout.addWidget(self.coreml_status)
@@ -460,7 +466,7 @@ class CloverTrainerWindow(QMainWindow):
             self,
             "About Clover Trainer",
             "Clover Image Tiny LoRA Trainer\n\n"
-            "A native Python desktop app for training styles and exporting Core ML.\n"
+            "A native Python desktop app for training styles and saving Core ML models.\n"
             "Code: Apache-2.0\nModel derivatives: CreativeML Open RAIL-M",
         )
 
@@ -525,6 +531,7 @@ class CloverTrainerWindow(QMainWindow):
             self.dataset_gallery.clear()
             return
         self.training_output_dir = str(values["output_dir"])
+        self.trigger_edit.setText(str(values["trigger"]))
         self.training_destination.setText(
             f"Style: {values['style']}  ·  Saves to: {self.training_output_dir}"
         )
@@ -597,7 +604,11 @@ class CloverTrainerWindow(QMainWindow):
         self.training_status.setText("Preparing the trainer…")
         QApplication.processEvents()
         try:
-            values = core.local_training_values(self.dataset_edit.text())
+            values = core.local_training_values(
+                self.dataset_edit.text(),
+                self.trigger_edit.text() or None,
+            )
+            self.trigger_edit.setText(str(values["trigger"]))
             self.training_output_dir = str(values["output_dir"])
             self.training_destination.setText(
                 f"Style: {values['style']}  ·  Saves to: {self.training_output_dir}"
@@ -624,7 +635,7 @@ class CloverTrainerWindow(QMainWindow):
 
     def _coreml_action_changed(self, action: str) -> None:
         labels = {
-            core.COREML_ACTIONS[0]: "Export for iPhone",
+            core.COREML_ACTIONS[0]: "Save Core ML model",
             core.COREML_ACTIONS[1]: "Compile for Xcode",
             core.COREML_ACTIONS[2]: "Validate model",
         }
@@ -723,7 +734,7 @@ class CloverTrainerWindow(QMainWindow):
         self.process_thread.process_completed.connect(self._process_completed)
         self.process_thread.start()
         self.statusBar().showMessage(
-            "Training is running" if workflow == "training" else "Core ML export is running"
+            "Training is running" if workflow == "training" else "Saving Core ML model"
         )
 
     def _stop_process(self) -> None:

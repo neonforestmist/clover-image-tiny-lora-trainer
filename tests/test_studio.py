@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,56 @@ import trainer_core as studio
 
 
 class CloverStudioTests(unittest.TestCase):
+    def test_local_dataset_loads_every_training_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "storybook-style"
+            images = root / "images"
+            images.mkdir(parents=True)
+            rows = []
+            for index in range(100):
+                image = images / f"{index:04d}.png"
+                image.touch()
+                rows.append(
+                    {
+                        "file_name": f"images/{image.name}",
+                        "text": f"storybook style, scene {index}",
+                    }
+                )
+            (root / "metadata.jsonl").write_text(
+                "\n".join(json.dumps(row) for row in rows) + "\n"
+            )
+
+            status, gallery = studio.dataset_preview(str(root))
+            values = studio.local_training_values(str(root))
+
+        self.assertEqual(len(gallery), 100)
+        self.assertEqual(status, "Loaded 100 local training pairs.")
+        self.assertEqual(values["style"], "storybook-style")
+        self.assertEqual(values["trigger"], "storybook style")
+
+    def test_user_trigger_phrase_is_used_and_validated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "custom-style"
+            images = root / "images"
+            images.mkdir(parents=True)
+            (images / "0001.png").touch()
+            (root / "metadata.jsonl").write_text(
+                json.dumps(
+                    {
+                        "file_name": "images/0001.png",
+                        "text": "My Trigger, a quiet garden",
+                    }
+                )
+                + "\n"
+            )
+
+            values = studio.local_training_values(str(root), "My Trigger")
+            with self.assertRaisesRegex(ValueError, "start of every caption"):
+                studio.local_training_values(str(root), "Wrong Trigger")
+
+        self.assertEqual(values["trigger"], "My Trigger")
+        self.assertEqual(values["validation_prompt"], "My Trigger, a quiet garden")
+
     def test_local_dataset_derives_standard_training_values(self) -> None:
         values = studio.local_training_values("data/example-monet")
 

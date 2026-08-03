@@ -65,6 +65,7 @@ cd "${model_parent}"
   --model-version "${model_name}" \
   --min-deployment-target iOS18 \
   --convert-unet \
+  --unet-batch-one \
   --attention-implementation ORIGINAL \
   --check-output-correctness \
   -o "${output_dir}"

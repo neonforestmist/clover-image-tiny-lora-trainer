@@ -1,4 +1,4 @@
-"""GUI-independent workflows for Clover LoRA training and Core ML export."""
+"""GUI-independent workflows for Clover LoRA training and Core ML creation."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ CONFIGS = {
 }
 STEP_PATTERN = re.compile(r"(?<!\d)(\d+)\s*/\s*(\d+)(?!\d)")
 COREML_ACTIONS = (
-    "Export stateful U-Net",
+    "Create Core ML model",
     "Compile for Xcode",
     "Validate parity",
 )
@@ -160,11 +160,14 @@ def local_dataset_preview(root: Path) -> list[tuple[Path, str]]:
     ]
     return [
         (root / row["file_name"], str(row.get("text", "")))
-        for row in rows[:12]
+        for row in rows
     ]
 
 
-def local_training_values(dataset_name: str) -> dict[str, Any]:
+def local_training_values(
+    dataset_name: str,
+    trigger_phrase: str | None = None,
+) -> dict[str, Any]:
     """Derive the standard training configuration from one imagefolder dataset."""
     root = resolve_path(dataset_name)
     if not root.is_dir():
@@ -184,8 +187,39 @@ def local_training_values(dataset_name: str) -> dict[str, Any]:
     style = re.sub(r"[^a-z0-9]+", "-", root.name.lower()).strip("-")
     style = style or "custom-style"
     first_caption = samples[0][1].strip()
-    trigger = first_caption.split(",", 1)[0].strip() or root.name.replace("-", " ")
-    validation_prompt = first_caption or f"{trigger}, a small blue cat"
+    inferred_trigger = (
+        first_caption.split(",", 1)[0].strip()
+        or root.name.replace("-", " ")
+    )
+    trigger = (
+        trigger_phrase.strip()
+        if trigger_phrase is not None
+        else inferred_trigger
+    )
+    if not trigger:
+        raise ValueError("Enter a trigger phrase.")
+    if trigger_phrase is not None:
+        prefix = trigger.casefold()
+        mismatched = [
+            path.name
+            for path, caption in samples
+            if not caption.strip().casefold().startswith(prefix + ",")
+        ]
+        if mismatched:
+            raise ValueError(
+                "The trigger phrase must appear at the start of every caption. "
+                f"First mismatch: {mismatched[0]}"
+            )
+    caption_detail = (
+        first_caption.split(",", 1)[1].strip()
+        if "," in first_caption
+        else ""
+    )
+    validation_prompt = (
+        f"{trigger}, {caption_detail}"
+        if caption_detail
+        else f"{trigger}, a small blue cat"
+    )
     return {
         "style": style,
         "dataset": str(root),
@@ -322,7 +356,7 @@ def coreml_requirements(
     def add(name: str, ok: bool, success: str, failure: str) -> None:
         requirements.append(Requirement(name, "Ready" if ok else "Missing", success if ok else failure))
 
-    add("macOS", platform.system() == "Darwin", platform.system(), "Core ML export requires macOS")
+    add("macOS", platform.system() == "Darwin", platform.system(), "Creating a Core ML model requires macOS")
     python_name = os.environ.get("PYTHON_BIN", "python3.11")
     python_path = shutil.which(python_name)
     add("Python 3.11", bool(python_path), python_path or "", f"{python_name} was not found")
@@ -337,12 +371,12 @@ def coreml_requirements(
         add("Style weights", style_ok, style_detail, style_detail)
 
     if action in (COREML_ACTIONS[1], COREML_ACTIONS[2]):
-        add("Stateful U-Net", package.is_dir(), str(package), "Run Export stateful U-Net first")
+        add("Stateful U-Net", package.is_dir(), str(package), "Create the Core ML model first")
     if action == COREML_ACTIONS[2]:
         schema = output / "coreml-state-schema.json"
         add("State schema", schema.is_file(), str(schema), "coreml-state-schema.json was not found")
         converter_python = ROOT / ".venv-coreml/bin/python"
-        add("Converter environment", converter_python.is_file(), str(converter_python), "Created automatically during export")
+        add("Converter environment", converter_python.is_file(), str(converter_python), "Created automatically while saving the model")
 
     free = shutil.disk_usage(ROOT).free
     if free >= 15 * 1024**3:
