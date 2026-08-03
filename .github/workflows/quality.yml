@@ -25,6 +25,6 @@ jobs:
       - name: Smoke test native desktop window
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -c "from PySide6.QtWidgets import QApplication; from trainer_gui import CloverTrainerWindow; app = QApplication([]); window = CloverTrainerWindow(); assert window.tabs.count() == 2; assert window.training_advanced.isHidden(); assert window.coreml_advanced.isHidden()"
+        run: python -c "from PySide6.QtWidgets import QApplication; from trainer_gui import CloverTrainerWindow; app = QApplication([]); window = CloverTrainerWindow(); assert window.tabs.count() == 2; assert window.training_details.isHidden(); assert window.coreml_advanced.isHidden(); assert not hasattr(window, 'preset_combo')"
       - name: Run studio tests
         run: python -m unittest discover -s tests -v

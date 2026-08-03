@@ -73,20 +73,20 @@ localhost and there is no share mode.
 
 ## Training workspace
 
-The main window asks for only four things: a recipe (the selected JSON file
-under [`configs/`](configs)), training images, an output folder, and whether to
-run a quick test or full training. Select **Train style** to begin. Image
-preview, progress, and stopping remain directly available.
+The trainer asks for exactly one thing: a local dataset folder containing
+`images/` and `metadata.jsonl`. Select **Check dataset** to verify and preview
+it, then select **Train style**.
 
-Training parameters, Hugging Face publishing, command output, logs, and sample
-inspection are under **Show advanced details**. They stay out of the way unless
-you need them.
-
-Always run the five-step smoke test first. It uses four samples, writes only
-local artifacts, and catches most environment or dataset problems before a
-long GPU run.
+The app derives the style name from the folder name, takes the validation prompt
+from the first metadata caption, uses Clover's standard rank-16 settings, and
+saves the result under `outputs/<folder-name>-lora`. Logs and generated samples
+are available under **Show log and samples**, but there are no additional
+training inputs.
 
 ### Published recipes
+
+These JSON recipes document the published reference styles for CLI
+reproducibility. The desktop trainer does not ask you to select one.
 
 | Style | Dataset | Trigger | Steps | Runtime style file |
 |---|---|---|---:|---|

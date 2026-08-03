@@ -15,7 +15,6 @@ from PySide6.QtGui import QAction, QCloseEvent, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
-    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -31,7 +30,6 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QTabWidget,
     QToolButton,
     QTreeWidget,
@@ -115,10 +113,10 @@ class CloverTrainerWindow(QMainWindow):
         self.active_progress: QProgressBar | None = None
         self.active_status: QLabel | None = None
         self.active_workflow = ""
+        self.training_output_dir = ""
 
         self._build_menu()
         self._build_window()
-        self._load_preset(next(iter(core.CONFIGS)))
         self._preview_coreml_command()
 
         if demo:
@@ -172,45 +170,30 @@ class CloverTrainerWindow(QMainWindow):
 
         layout.addWidget(self._heading("Train a style"))
         intro = QLabel(
-            "Choose a recipe and your training images. Clover handles the rest."
+            "Choose one dataset folder containing images/ and metadata.jsonl. "
+            "Clover derives everything else automatically."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
         form = QFormLayout()
         form.setVerticalSpacing(10)
-        self.preset_combo = QComboBox()
-        for name in core.CONFIGS:
-            title = name.replace("-", " ").title()
-            self.preset_combo.addItem(f"{title} (configs/{name}.json)", name)
-        self.preset_combo.currentIndexChanged.connect(
-            lambda _index: self._load_preset(str(self.preset_combo.currentData()))
-        )
-        form.addRow("Recipe", self.preset_combo)
-
         self.dataset_edit = QLineEdit()
-        self.dataset_edit.setPlaceholderText(
-            "Choose a folder or enter a Hugging Face dataset"
-        )
+        self.dataset_edit.setPlaceholderText("my-style/ (contains images/ and metadata.jsonl)")
         form.addRow(
-            "Training images",
+            "Dataset folder",
             self._path_row(self.dataset_edit, self._choose_dataset_folder, "Choose folder…"),
         )
-
-        self.output_edit = QLineEdit()
-        form.addRow(
-            "Save style to",
-            self._path_row(self.output_edit, self._choose_output_folder, "Choose folder…"),
-        )
-
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItem("Quick test (5 steps)", "5-step smoke test")
-        self.mode_combo.addItem("Full training", "Full training")
-        form.addRow("Run", self.mode_combo)
         layout.addLayout(form)
 
+        self.training_destination = QLabel(
+            "The style name and output folder are created from the dataset folder name."
+        )
+        self.training_destination.setWordWrap(True)
+        layout.addWidget(self.training_destination)
+
         buttons = QHBoxLayout()
-        self.load_preview_button = QPushButton("Preview images")
+        self.load_preview_button = QPushButton("Check dataset")
         self.load_preview_button.clicked.connect(self._load_dataset_preview)
         self.training_start_button = QPushButton("Train style")
         self.training_start_button.clicked.connect(self._start_training)
@@ -226,110 +209,39 @@ class CloverTrainerWindow(QMainWindow):
         self.training_progress = QProgressBar()
         self.training_progress.setRange(0, 100)
         self.training_progress.setValue(0)
-        self.training_status = QLabel("Ready to preview your images or run a quick test.")
+        self.training_status = QLabel("Choose your dataset folder to begin.")
         self.training_status.setWordWrap(True)
         layout.addWidget(self.training_progress)
         layout.addWidget(self.training_status)
 
-        self.preview_status = QLabel("No images loaded yet.")
+        self.preview_status = QLabel("Expected layout: images/ and metadata.jsonl")
         self.preview_status.setWordWrap(True)
         layout.addWidget(self.preview_status)
         self.dataset_gallery = self._image_list(116)
         self.dataset_gallery.setFixedHeight(174)
         layout.addWidget(self.dataset_gallery)
 
-        self.training_details_button = self._details_button("advanced details")
+        self.training_details_button = self._details_button("log and samples")
         self.training_details_button.toggled.connect(
             lambda shown: self._toggle_details(
                 self.training_details_button,
-                self.training_advanced,
+                self.training_details,
                 shown,
-                "advanced details",
+                "log and samples",
             )
         )
         layout.addWidget(self.training_details_button)
 
-        self.training_advanced = self._build_training_advanced()
-        self.training_advanced.hide()
-        layout.addWidget(self.training_advanced)
+        self.training_details = self._build_training_details()
+        self.training_details.hide()
+        layout.addWidget(self.training_details)
         layout.addStretch(1)
         return self._scroll_page(page)
 
-    def _build_training_advanced(self) -> QWidget:
+    def _build_training_details(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 2, 0, 0)
-        layout.setSpacing(10)
-
-        settings = QFormLayout()
-        self.style_edit = QLineEdit()
-        settings.addRow("Style name", self.style_edit)
-        self.trigger_edit = QLineEdit()
-        settings.addRow("Trigger phrase", self.trigger_edit)
-        self.validation_prompt_edit = QPlainTextEdit()
-        self.validation_prompt_edit.setFixedHeight(54)
-        settings.addRow("Validation prompt", self.validation_prompt_edit)
-        self.base_model_edit = QLineEdit(train_lora.BASE_MODEL)
-        self.base_model_edit.setCursorPosition(0)
-        settings.addRow("Base model", self.base_model_edit)
-
-        steps_rank = QWidget()
-        steps_rank_layout = QHBoxLayout(steps_rank)
-        steps_rank_layout.setContentsMargins(0, 0, 0, 0)
-        self.steps_spin = QSpinBox()
-        self.steps_spin.setRange(5, 10000)
-        self.rank_combo = QComboBox()
-        self.rank_combo.addItems(["4", "8", "16", "32"])
-        steps_rank_layout.addWidget(QLabel("Steps"))
-        steps_rank_layout.addWidget(self.steps_spin)
-        steps_rank_layout.addSpacing(8)
-        steps_rank_layout.addWidget(QLabel("Rank"))
-        steps_rank_layout.addWidget(self.rank_combo)
-        settings.addRow("Training size", steps_rank)
-
-        self.learning_rate_spin = QDoubleSpinBox()
-        self.learning_rate_spin.setDecimals(6)
-        self.learning_rate_spin.setRange(0.000001, 1.0)
-        self.learning_rate_spin.setSingleStep(0.00001)
-        settings.addRow("Learning rate", self.learning_rate_spin)
-
-        batch_row = QWidget()
-        batch_layout = QHBoxLayout(batch_row)
-        batch_layout.setContentsMargins(0, 0, 0, 0)
-        self.batch_spin = QSpinBox()
-        self.batch_spin.setRange(1, 64)
-        self.accumulation_spin = QSpinBox()
-        self.accumulation_spin.setRange(1, 128)
-        batch_layout.addWidget(QLabel("Batch"))
-        batch_layout.addWidget(self.batch_spin)
-        batch_layout.addSpacing(8)
-        batch_layout.addWidget(QLabel("Accumulation"))
-        batch_layout.addWidget(self.accumulation_spin)
-        settings.addRow("Batching", batch_row)
-
-        self.precision_combo = QComboBox()
-        self.precision_combo.addItems(["fp16", "bf16", "no"])
-        settings.addRow("Mixed precision", self.precision_combo)
-        self.checkpoint_spin = QSpinBox()
-        self.checkpoint_spin.setRange(1, 10000)
-        settings.addRow("Checkpoint interval", self.checkpoint_spin)
-        self.seed_spin = QSpinBox()
-        self.seed_spin.setRange(0, 2_147_483_647)
-        settings.addRow("Seed", self.seed_spin)
-        self.hub_edit = QLineEdit()
-        settings.addRow("Hugging Face repo", self.hub_edit)
-        self.push_checkbox = QCheckBox("Push after training")
-        settings.addRow("", self.push_checkbox)
-        layout.addLayout(settings)
-
-        self.training_preview_button = QPushButton("Refresh command preview")
-        self.training_preview_button.clicked.connect(self._preview_training_command)
-        layout.addWidget(self.training_preview_button)
-        self.training_command_box = QPlainTextEdit()
-        self.training_command_box.setReadOnly(True)
-        self.training_command_box.setMaximumHeight(74)
-        layout.addWidget(self.training_command_box)
-
         self.training_output_tabs = QTabWidget()
         self.training_log = QPlainTextEdit()
         self.training_log.setReadOnly(True)
@@ -564,9 +476,8 @@ class CloverTrainerWindow(QMainWindow):
 
     def _choose_dataset_folder(self) -> None:
         self._choose_directory(self.dataset_edit, "Choose training images")
-
-    def _choose_output_folder(self) -> None:
-        self._choose_directory(self.output_edit, "Choose where to save the style")
+        if self.dataset_edit.text():
+            self._load_dataset_preview()
 
     def _choose_model_folder(self) -> None:
         self._choose_directory(self.model_dir_edit, "Choose Clover model")
@@ -593,65 +504,30 @@ class CloverTrainerWindow(QMainWindow):
             edit.setText(path)
             edit.setCursorPosition(0)
 
-    def _load_preset(self, name: str) -> None:
-        if not name or name not in core.CONFIGS:
-            return
-        values = core.config_values(name)
-        self.style_edit.setText(values["style"])
-        self.dataset_edit.setText(values["dataset"])
-        self.trigger_edit.setText(values["trigger"])
-        self.validation_prompt_edit.setPlainText(values["validation_prompt"])
-        self.output_edit.setText(values["output_dir"])
-        self.steps_spin.setValue(values["max_train_steps"])
-        self.rank_combo.setCurrentText(str(values["rank"]))
-        self.learning_rate_spin.setValue(values["learning_rate"])
-        self.batch_spin.setValue(values["train_batch_size"])
-        self.accumulation_spin.setValue(values["gradient_accumulation_steps"])
-        self.precision_combo.setCurrentText(values["mixed_precision"])
-        self.checkpoint_spin.setValue(values["checkpointing_steps"])
-        self.seed_spin.setValue(values["seed"])
-        self.hub_edit.setText(values["hub_model_id"])
-        for edit in (
-            self.style_edit,
-            self.dataset_edit,
-            self.trigger_edit,
-            self.output_edit,
-            self.hub_edit,
-        ):
-            edit.setCursorPosition(0)
-        self._preview_training_command()
-
-    def _training_values(self) -> dict[str, Any]:
-        return {
-            "style": self.style_edit.text(),
-            "dataset": self.dataset_edit.text(),
-            "trigger": self.trigger_edit.text(),
-            "validation_prompt": self.validation_prompt_edit.toPlainText(),
-            "output_dir": self.output_edit.text(),
-            "max_train_steps": self.steps_spin.value(),
-            "rank": int(self.rank_combo.currentText()),
-            "learning_rate": self.learning_rate_spin.value(),
-            "train_batch_size": self.batch_spin.value(),
-            "gradient_accumulation_steps": self.accumulation_spin.value(),
-            "mixed_precision": self.precision_combo.currentText(),
-            "checkpointing_steps": self.checkpoint_spin.value(),
-            "seed": self.seed_spin.value(),
-            "hub_model_id": self.hub_edit.text(),
-        }
-
-    def _training_mode(self) -> str:
-        return str(self.mode_combo.currentData())
-
     def _load_dataset_preview(self) -> None:
         if self.preview_thread is not None and self.preview_thread.isRunning():
             return
         if not self.dataset_edit.text().strip():
             QMessageBox.information(
                 self,
-                "Choose training images",
-                "Choose a local image folder or enter a Hugging Face dataset first.",
+                "Choose a dataset folder",
+                "Choose the folder containing images/ and metadata.jsonl.",
             )
             return
+        try:
+            values = core.local_training_values(self.dataset_edit.text())
+        except (OSError, ValueError, KeyError) as error:
+            self.preview_status.setText(str(error))
+            self.training_status.setText("The dataset folder is not ready.")
+            self.training_destination.setText(
+                "The style name and output folder are created from the dataset folder name."
+            )
+            self.dataset_gallery.clear()
+            return
+        self.training_output_dir = str(values["output_dir"])
+        self.training_destination.setText(
+            f"Style: {values['style']}  ·  Saves to: {self.training_output_dir}"
+        )
         self.load_preview_button.setEnabled(False)
         self.preview_status.setText("Loading images…")
         self.preview_thread = DatasetPreviewThread(self.dataset_edit.text())
@@ -662,6 +538,7 @@ class CloverTrainerWindow(QMainWindow):
 
     def _dataset_preview_ready(self, status: str, samples: object) -> None:
         self.preview_status.setText(status)
+        self.training_status.setText("Dataset ready. Select Train style to begin.")
         self._populate_images(self.dataset_gallery, list(samples), 116)
 
     def _dataset_preview_failed(self, error: str) -> None:
@@ -707,40 +584,32 @@ class CloverTrainerWindow(QMainWindow):
             Qt.TransformationMode.SmoothTransformation,
         )
 
-    def _preview_training_command(self) -> None:
-        try:
-            command = core.training_preview(
-                self._training_values(),
-                self.base_model_edit.text(),
-                self._training_mode(),
-                self.push_checkbox.isChecked(),
-            )
-            self.training_command_box.setPlainText(command)
-        except Exception as error:  # noqa: BLE001 - keep main flow usable
-            self.training_command_box.setPlainText(f"Could not build command: {error}")
-
     def _start_training(self) -> None:
         if self.process_thread is not None:
             return
         if not self.dataset_edit.text().strip():
             QMessageBox.information(
                 self,
-                "Choose training images",
-                "Choose a local image folder or enter a Hugging Face dataset first.",
+                "Choose a dataset folder",
+                "Choose the folder containing images/ and metadata.jsonl.",
             )
             return
         self.training_status.setText("Preparing the trainer…")
         QApplication.processEvents()
         try:
-            config = core.make_config(self._training_values())
+            values = core.local_training_values(self.dataset_edit.text())
+            self.training_output_dir = str(values["output_dir"])
+            self.training_destination.setText(
+                f"Style: {values['style']}  ·  Saves to: {self.training_output_dir}"
+            )
+            config = core.make_config(values)
             command = core.training_command(
                 config,
-                self.base_model_edit.text(),
-                self._training_mode(),
-                self.push_checkbox.isChecked(),
+                train_lora.BASE_MODEL,
+                "Full training",
+                False,
                 fetch=True,
             )
-            self.training_command_box.setPlainText(core.display_command(command))
         except Exception as error:  # noqa: BLE001 - show startup errors
             self.training_status.setText("Could not start training.")
             QMessageBox.warning(self, "Could not start training", str(error))
@@ -873,7 +742,7 @@ class CloverTrainerWindow(QMainWindow):
             self.active_progress.setValue(100)
         if self.active_workflow == "training":
             samples = [
-                (path, path.name) for path in core.sample_images(self.output_edit.text())
+                (path, path.name) for path in core.sample_images(self.training_output_dir)
             ]
             self._populate_images(self.sample_gallery, samples, 116)
         else:

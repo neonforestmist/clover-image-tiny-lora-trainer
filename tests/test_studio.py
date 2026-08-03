@@ -8,6 +8,25 @@ import trainer_core as studio
 
 
 class CloverStudioTests(unittest.TestCase):
+    def test_local_dataset_derives_standard_training_values(self) -> None:
+        values = studio.local_training_values("data/example-monet")
+
+        self.assertEqual(values["style"], "example-monet")
+        self.assertTrue(values["dataset"].endswith("data/example-monet"))
+        self.assertEqual(values["output_dir"], "outputs/example-monet-lora")
+        self.assertEqual(values["rank"], 16)
+        self.assertIn("Monet Style", values["validation_prompt"])
+
+        command = studio.training_preview(
+            values,
+            studio.train_lora.BASE_MODEL,
+            "Full training",
+            False,
+        )
+        self.assertIn("--train_data_dir data/example-monet", command)
+        self.assertIn("--max_train_steps 1000", command)
+        self.assertIn("--output_dir outputs/example-monet-lora", command)
+
     def test_training_recipe_builds_smoke_command(self) -> None:
         values = studio.config_values("monet")
         command = studio.training_preview(

@@ -164,6 +164,46 @@ def local_dataset_preview(root: Path) -> list[tuple[Path, str]]:
     ]
 
 
+def local_training_values(dataset_name: str) -> dict[str, Any]:
+    """Derive the standard training configuration from one imagefolder dataset."""
+    root = resolve_path(dataset_name)
+    if not root.is_dir():
+        raise ValueError("Choose a dataset folder.")
+    if not (root / "images").is_dir():
+        raise ValueError("The dataset folder must contain an images folder.")
+    if not (root / "metadata.jsonl").is_file():
+        raise ValueError("The dataset folder must contain metadata.jsonl.")
+
+    samples = local_dataset_preview(root)
+    if not samples:
+        raise ValueError("metadata.jsonl does not contain any training rows.")
+    missing = [path.name for path, _caption in samples if not path.is_file()]
+    if missing:
+        raise ValueError(f"Training image not found: {missing[0]}")
+
+    style = re.sub(r"[^a-z0-9]+", "-", root.name.lower()).strip("-")
+    style = style or "custom-style"
+    first_caption = samples[0][1].strip()
+    trigger = first_caption.split(",", 1)[0].strip() or root.name.replace("-", " ")
+    validation_prompt = first_caption or f"{trigger}, a small blue cat"
+    return {
+        "style": style,
+        "dataset": str(root),
+        "trigger": trigger,
+        "validation_prompt": validation_prompt,
+        "output_dir": f"outputs/{style}-lora",
+        "max_train_steps": 1000,
+        "rank": 16,
+        "learning_rate": 1e-4,
+        "train_batch_size": 1,
+        "gradient_accumulation_steps": 1,
+        "mixed_precision": "fp16",
+        "checkpointing_steps": 250,
+        "seed": train_lora.SEED,
+        "hub_model_id": "",
+    }
+
+
 def dataset_preview(dataset_name: str) -> tuple[str, list[tuple[Any, str]]]:
     local = resolve_path(dataset_name)
     if local.exists():
