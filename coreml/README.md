@@ -1,95 +1,122 @@
-# Core ML export for Clover LoRA styles
+# Core ML export workspace
 
-The current iPhone architecture stores Clover once and applies small named
-style files at runtime:
+Clover Studio provides a complete GUI for creating and validating the shared
+stateful Core ML U-Net used by the iPhone app.
 
 ```text
 Shared Core ML pipeline (~1.5 GB)
              +
-Monet.safetensors (~6.9 MB)
+Named style.safetensors (~6.9 MB at rank 16)
              ↓
 iOS writes 144 LoRA tensors into MLState
 ```
 
-This requires iOS 18 or newer. The exported U-Net behaves like base Clover
-when its state buffers are zero and changes style when the app loads Monet,
-Pointillism, or Watercolor Anime weights.
+The large base is installed once. Monet, Pointillism, Watercolor Anime, and
+user-imported compatible styles stay as small independent files.
 
-## Files
+## Use the GUI
 
-```text
-coreml/
-├── export_stateful.sh              # current iOS 18 export entry point
-├── convert_stateful_lora_unet.py   # add zero-initialized LoRA MLState buffers
-├── validate_stateful_lora.py       # compare Core ML base/style outputs
-├── convert.sh                      # legacy fused/chunked converter
-├── fuse_lora.py                    # legacy fused style preparation
-├── convert_lora_unet.py            # validation helper and legacy unfused path
-├── apple-no-mid-block.patch        # Clover converter compatibility patch
-└── constraints.txt                 # pinned Apple converter environment
+From the repository root:
+
+```bash
+source .venv/bin/activate
+python trainer_gui.py
 ```
 
-## Requirements
+Open `http://127.0.0.1:7860`, then select **Core ML export**.
 
-- macOS and Xcode command-line tools (`xcrun` on `PATH`)
-- Python 3.11
-- a local checkout of `Clover-Image-Tiny`
-- one compatible Clover LoRA `safetensors` file to define the state shapes
+<p align="center">
+  <img src="../assets/gui-coreml.png" alt="Core ML export workspace" width="1200">
+</p>
 
-The template file determines names and shapes only. All exported state values
-start at zero, so the base model is not permanently styled.
+### 1. Choose local inputs
 
-## Export the stateful U-Net
+- **Clover model folder** — a local Diffusers checkpoint containing
+  `model_index.json`.
+- **Style .safetensors** — a compatible Clover LoRA. It defines tensor names
+  and shapes; exported state values still start at zero.
+- **Core ML output folder** — where the package and schema should be written.
 
-Run from this repository:
+### 2. Check readiness
+
+The preflight checks macOS, Python 3.11, Xcode command-line tools, the chosen
+model and style, previously generated artifacts, and available disk space.
+Resolve every red requirement before running a step. Treat the disk warning as
+actionable because conversion environments and intermediate packages are
+large.
+
+### 3. Run all three steps
+
+1. **Export stateful U-Net** creates `Unet.mlpackage` and
+   `coreml-state-schema.json`.
+2. **Compile for Xcode** invokes `xcrun coremlcompiler` and writes compiled
+   resources under `compiled/`.
+3. **Validate parity** runs deterministic base and styled inputs through
+   PyTorch and Core ML. Both PSNR results must meet the 35 dB default.
+
+Every action has a command preview, live progress, streamed logs, cancellation,
+and an artifact summary. The GUI calls the same scripts documented below.
+
+## Equivalent command line
+
+### Export
 
 ```bash
 ./coreml/export_stateful.sh \
   /path/to/Clover-Image-Tiny \
-  /tmp/clover-stateful \
+  coreml-models/clover-stateful \
   /path/to/Monet.safetensors
 ```
 
-The script checks out Apple's converter at the repository's pinned revision,
-applies Clover's no-middle-block compatibility patch, creates an isolated
-conversion environment, and exports:
+The script checks out Apple’s converter at the repository’s pinned revision,
+applies Clover’s no-middle-block patch, creates an isolated Python environment,
+and exports:
 
-- `Unet.mlpackage`, the stateful Core ML U-Net;
-- `coreml-state-schema.json`, the mapping from Diffusers tensor keys to Core
-  ML state names.
+- `Unet.mlpackage` — the iOS 18 stateful Core ML U-Net;
+- `coreml-state-schema.json` — the Diffusers-key to Core ML-state mapping.
 
-Compile the package for distribution:
+### Compile
 
 ```bash
 xcrun coremlcompiler compile \
-  /tmp/clover-stateful/Unet.mlpackage \
-  /tmp/clover-stateful/compiled
+  coreml-models/clover-stateful/Unet.mlpackage \
+  coreml-models/clover-stateful/compiled
 ```
 
-The text encoder, VAE decoder, safety checker, tokenizer, and merges are shared
-with the normal base conversion and only need to be distributed once.
-
-## Validate base and style parity
-
-The validation tool runs identical deterministic U-Net inputs through PyTorch
-and Core ML twice: with zero state and with a named style loaded.
+### Validate
 
 ```bash
-python coreml/validate_stateful_lora.py \
+.venv-coreml/bin/python coreml/validate_stateful_lora.py \
   --model-version /path/to/Clover-Image-Tiny \
-  --coreml-model /tmp/clover-stateful/Unet.mlpackage \
-  --adapter-schema /tmp/clover-stateful/coreml-state-schema.json \
-  --lora-weights /path/to/Monet.safetensors
+  --coreml-model coreml-models/clover-stateful/Unet.mlpackage \
+  --adapter-schema coreml-models/clover-stateful/coreml-state-schema.json \
+  --lora-weights /path/to/Monet.safetensors \
+  --minimum-psnr 35
 ```
 
-Both PSNR values must meet the default 35 dB threshold. Validate at least one
-style from every training configuration before publishing a new base model.
+Validate at least one style from every training configuration before
+publishing a new shared base.
+
+## Tooling map
+
+```text
+coreml/
+├── export_stateful.sh              # current iOS 18 entry point
+├── convert_stateful_lora_unet.py   # inject and export MLState buffers
+├── validate_stateful_lora.py       # base/style PyTorch ↔ Core ML parity
+├── constraints.txt                 # pinned converter environment
+├── apple-no-mid-block.patch        # Clover converter compatibility
+├── convert.sh                      # legacy fused/chunked conversion
+├── fuse_lora.py                    # legacy style fusion
+└── convert_lora_unet.py            # legacy and validation helper
+```
 
 ## Legacy fused conversion
 
-`convert.sh` and `fuse_lora.py` bake a style into a separate Core ML U-Net.
-That path explains the old roughly 648 MB-per-style downloads and remains for
-reproducibility. It is not the architecture used by the current iOS catalog.
+`convert.sh` and `fuse_lora.py` bake a style into its own Core ML U-Net. That
+path produced the old roughly 648 MB-per-style downloads and remains only for
+reproducibility. The current iOS catalog uses one shared stateful base and
+small named `.safetensors` styles.
 
 ## Licensing
 

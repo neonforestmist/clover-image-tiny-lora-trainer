@@ -6,6 +6,8 @@ checkpoint-*/
 logs/
 
 # CoreML conversion artifacts
+.coreml-converter/
+.venv-coreml/
 coreml/.coreml-converter/
 coreml/.venv-coreml/
 coreml-models/
