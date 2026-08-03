@@ -38,15 +38,13 @@ there is no share mode.
 
 ## Training workspace
 
-The interface keeps the work in three visible stages:
+The main window asks for only four things: a recipe, training images, an output
+folder, and whether to run a quick test or full training. Select **Train style**
+to begin. Image preview, progress, and stopping remain directly available.
 
-1. **Style recipe** — load Monet, Pointillism, or Watercolor Anime defaults;
-   choose a Hub dataset or local imagefolder; and set the trigger phrase.
-2. **Training plan** — choose a five-step smoke test or a full run, then tune
-   steps, rank, learning rate, batch behavior, checkpoints, and seed.
-3. **Review and run** — inspect the exact `accelerate` command before starting,
-   follow progress and logs, stop safely, and review generated validation
-   samples.
+Training parameters, Hugging Face publishing, command output, logs, and sample
+inspection are under **Show advanced details**. They stay out of the way unless
+you need them.
 
 Always run the five-step smoke test first. It uses four samples, writes only
 local artifacts, and catches most environment or dataset problems before a
@@ -73,16 +71,10 @@ required.
   <img src="assets/gui-coreml.png" alt="Native Clover Core ML export window" width="1200">
 </p>
 
-The **Core ML export** tab provides:
-
-- local path fields for the Clover Diffusers checkpoint, a compatible
-  `.safetensors` style, and the output directory;
-- a preflight panel that checks macOS, Python 3.11, Xcode tools, model files,
-  style weights, generated artifacts, and free disk space;
-- separate **Export stateful U-Net**, **Compile for Xcode**, and **Validate
-  parity** actions;
-- a copyable command preview, streamed conversion logs, progress, stop control,
-  and output-artifact discovery.
+The **Core ML** tab asks for the Clover model folder, one `.safetensors` style,
+and an output folder. Select **Export for iPhone** to begin. Preflight checks,
+compilation, parity validation, command output, logs, and artifact inspection
+are available under **Show technical details**.
 
 The stateful export requires macOS, Xcode command-line tools, Python 3.11, and
 iOS 18 or newer at runtime. Keep at least 15 GB free while building the

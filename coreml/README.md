@@ -30,7 +30,17 @@ controls and file pickers; no browser or local web server is involved.
   <img src="../assets/gui-coreml.png" alt="Core ML export workspace" width="1200">
 </p>
 
-### 1. Choose local inputs
+The default view has one short workflow:
+
+1. Choose the Clover model folder.
+2. Choose a compatible `.safetensors` style file.
+3. Choose an output folder.
+4. Select **Export for iPhone**.
+
+Open **Show technical details** only when you need preflight results,
+compilation, validation, command output, logs, or generated artifacts.
+
+### Choose local inputs
 
 - **Clover model folder** — a local Diffusers checkpoint containing
   `model_index.json`.
@@ -38,15 +48,13 @@ controls and file pickers; no browser or local web server is involved.
   and shapes; exported state values still start at zero.
 - **Core ML output folder** — where the package and schema should be written.
 
-### 2. Check readiness
+### Check readiness
 
-The preflight checks macOS, Python 3.11, Xcode command-line tools, the chosen
-model and style, previously generated artifacts, and available disk space.
-Resolve every red requirement before running a step. Treat the disk warning as
-actionable because conversion environments and intermediate packages are
-large.
+The app checks macOS, Python 3.11, Xcode command-line tools, the chosen model
+and style, generated artifacts, and available disk space when you export. The
+same results are visible under **Show technical details**.
 
-### 3. Run all three steps
+### Optional follow-up steps
 
 1. **Export stateful U-Net** creates `Unet.mlpackage` and
    `coreml-state-schema.json`.
@@ -55,8 +63,9 @@ large.
 3. **Validate parity** runs deterministic base and styled inputs through
    PyTorch and Core ML. Both PSNR results must meet the 35 dB default.
 
-Every action has a command preview, live progress, streamed logs, cancellation,
-and an artifact summary. The GUI calls the same scripts documented below.
+Compilation and validation are selected under **Show technical details**. Every
+action keeps a command preview, live progress, streamed logs, cancellation, and
+an artifact summary. The GUI calls the same scripts documented below.
 
 ## Equivalent command line
 

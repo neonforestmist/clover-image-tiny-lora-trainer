@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native desktop application for Clover LoRA training and Core ML export."""
+"""Simple native desktop app for Clover LoRA training and Core ML export."""
 
 from __future__ import annotations
 
@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -33,8 +32,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
-    QSplitter,
     QTabWidget,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -77,7 +76,7 @@ class ProcessThread(QThread):
                     progress = core.coreml_progress(clean, progress)
                 self.progress_changed.emit(progress)
             code = self.process.wait()
-        except Exception as error:  # noqa: BLE001 - report process startup errors
+        except Exception as error:  # noqa: BLE001 - display process errors
             self.line_received.emit(f"Could not run command: {error}")
             code = 1
         self.process_completed.emit(code)
@@ -99,16 +98,16 @@ class DatasetPreviewThread(QThread):
         try:
             status, samples = core.dataset_preview(self.dataset)
             self.preview_ready.emit(status, samples)
-        except Exception as error:  # noqa: BLE001 - show dataset errors in the app
+        except Exception as error:  # noqa: BLE001 - display dataset errors
             self.preview_failed.emit(str(error))
 
 
 class CloverTrainerWindow(QMainWindow):
     def __init__(self, *, selected_tab: str = "training", demo: bool = False) -> None:
         super().__init__()
-        self.setWindowTitle("Clover Image Tiny LoRA Trainer")
-        self.resize(1220, 840)
-        self.setMinimumSize(980, 680)
+        self.setWindowTitle("Clover LoRA Trainer")
+        self.resize(900, 760)
+        self.setMinimumSize(760, 600)
 
         self.process_thread: ProcessThread | None = None
         self.preview_thread: DatasetPreviewThread | None = None
@@ -120,15 +119,14 @@ class CloverTrainerWindow(QMainWindow):
         self._build_menu()
         self._build_window()
         self._load_preset(next(iter(core.CONFIGS)))
+        self._preview_coreml_command()
 
         if demo:
             self.dataset_edit.setText("data/example-monet")
             self.dataset_edit.setCursorPosition(0)
             self._load_dataset_preview()
-            self._preview_training_command()
         if selected_tab == "coreml":
             self.tabs.setCurrentWidget(self.coreml_tab)
-            self._preview_coreml_command()
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("File")
@@ -138,34 +136,27 @@ class CloverTrainerWindow(QMainWindow):
         file_menu.addAction(quit_action)
 
         help_menu = self.menuBar().addMenu("Help")
-        about_action = QAction("About Clover Trainer", self)
+        about_action = QAction("About", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
     def _build_window(self) -> None:
         central = QWidget()
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(18, 16, 18, 14)
+        layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(10)
 
-        title = QLabel("Clover Image Tiny LoRA Trainer")
+        title = QLabel("Clover LoRA Trainer")
         title_font = title.font()
-        title_font.setPointSize(title_font.pointSize() + 6)
+        title_font.setPointSize(title_font.pointSize() + 4)
         title_font.setBold(True)
         title.setFont(title_font)
         layout.addWidget(title)
 
-        subtitle = QLabel(
-            "Train compact style files and export the shared stateful Core ML model. "
-            "All work runs as local processes on this computer."
-        )
-        subtitle.setWordWrap(True)
-        layout.addWidget(subtitle)
-
         self.tabs = QTabWidget()
         self.training_tab = self._build_training_tab()
         self.coreml_tab = self._build_coreml_tab()
-        self.tabs.addTab(self.training_tab, "Training")
+        self.tabs.addTab(self.training_tab, "Train Style")
         self.tabs.addTab(self.coreml_tab, "Core ML")
         self.tabs.currentChanged.connect(self._tab_changed)
         layout.addWidget(self.tabs, 1)
@@ -173,53 +164,110 @@ class CloverTrainerWindow(QMainWindow):
         self.setCentralWidget(central)
         self.statusBar().showMessage("Ready")
 
-    def _build_training_tab(self) -> QWidget:
-        tab = QWidget()
-        layout = QHBoxLayout(tab)
-        layout.setContentsMargins(10, 12, 10, 10)
+    def _build_training_tab(self) -> QScrollArea:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
 
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(self._build_training_form())
-        splitter.addWidget(self._build_training_run_panel())
-        splitter.setSizes([450, 720])
-        layout.addWidget(splitter)
-        return tab
+        layout.addWidget(self._heading("Train a style"))
+        intro = QLabel(
+            "Choose a recipe and your training images. Clover handles the rest."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
 
-    def _build_training_form(self) -> QScrollArea:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setMinimumWidth(390)
-        container = QWidget()
-        layout = QVBoxLayout(container)
-
-        dataset_group = QGroupBox("1. Style and dataset")
-        dataset_form = QFormLayout(dataset_group)
+        form = QFormLayout()
+        form.setVerticalSpacing(10)
         self.preset_combo = QComboBox()
         self.preset_combo.addItems(list(core.CONFIGS))
         self.preset_combo.currentTextChanged.connect(self._load_preset)
-        dataset_form.addRow("Recipe", self.preset_combo)
-        self.style_edit = QLineEdit()
-        dataset_form.addRow("Style name", self.style_edit)
-        self.dataset_edit = QLineEdit()
-        dataset_form.addRow("Dataset", self._path_row(self.dataset_edit, self._choose_dataset_folder))
-        self.trigger_edit = QLineEdit()
-        dataset_form.addRow("Trigger phrase", self.trigger_edit)
-        self.validation_prompt_edit = QPlainTextEdit()
-        self.validation_prompt_edit.setFixedHeight(58)
-        dataset_form.addRow("Validation prompt", self.validation_prompt_edit)
-        self.load_preview_button = QPushButton("Load dataset preview")
-        self.load_preview_button.clicked.connect(self._load_dataset_preview)
-        dataset_form.addRow("", self.load_preview_button)
-        layout.addWidget(dataset_group)
+        form.addRow("Recipe", self.preset_combo)
 
-        settings_group = QGroupBox("2. Training settings")
-        settings_form = QFormLayout(settings_group)
+        self.dataset_edit = QLineEdit()
+        self.dataset_edit.setPlaceholderText(
+            "Choose a folder or enter a Hugging Face dataset"
+        )
+        form.addRow(
+            "Training images",
+            self._path_row(self.dataset_edit, self._choose_dataset_folder, "Choose folder…"),
+        )
+
+        self.output_edit = QLineEdit()
+        form.addRow(
+            "Save style to",
+            self._path_row(self.output_edit, self._choose_output_folder, "Choose folder…"),
+        )
+
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("Quick test (5 steps)", "5-step smoke test")
+        self.mode_combo.addItem("Full training", "Full training")
+        form.addRow("Run", self.mode_combo)
+        layout.addLayout(form)
+
+        buttons = QHBoxLayout()
+        self.load_preview_button = QPushButton("Preview images")
+        self.load_preview_button.clicked.connect(self._load_dataset_preview)
+        self.training_start_button = QPushButton("Train style")
+        self.training_start_button.clicked.connect(self._start_training)
+        self.training_stop_button = QPushButton("Stop")
+        self.training_stop_button.setEnabled(False)
+        self.training_stop_button.clicked.connect(self._stop_process)
+        buttons.addWidget(self.load_preview_button)
+        buttons.addStretch(1)
+        buttons.addWidget(self.training_stop_button)
+        buttons.addWidget(self.training_start_button)
+        layout.addLayout(buttons)
+
+        self.training_progress = QProgressBar()
+        self.training_progress.setRange(0, 100)
+        self.training_progress.setValue(0)
+        self.training_status = QLabel("Ready to preview your images or run a quick test.")
+        self.training_status.setWordWrap(True)
+        layout.addWidget(self.training_progress)
+        layout.addWidget(self.training_status)
+
+        self.preview_status = QLabel("No images loaded yet.")
+        self.preview_status.setWordWrap(True)
+        layout.addWidget(self.preview_status)
+        self.dataset_gallery = self._image_list(116)
+        self.dataset_gallery.setFixedHeight(174)
+        layout.addWidget(self.dataset_gallery)
+
+        self.training_details_button = self._details_button("advanced details")
+        self.training_details_button.toggled.connect(
+            lambda shown: self._toggle_details(
+                self.training_details_button,
+                self.training_advanced,
+                shown,
+                "advanced details",
+            )
+        )
+        layout.addWidget(self.training_details_button)
+
+        self.training_advanced = self._build_training_advanced()
+        self.training_advanced.hide()
+        layout.addWidget(self.training_advanced)
+        layout.addStretch(1)
+        return self._scroll_page(page)
+
+    def _build_training_advanced(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 2, 0, 0)
+        layout.setSpacing(10)
+
+        settings = QFormLayout()
+        self.style_edit = QLineEdit()
+        settings.addRow("Style name", self.style_edit)
+        self.trigger_edit = QLineEdit()
+        settings.addRow("Trigger phrase", self.trigger_edit)
+        self.validation_prompt_edit = QPlainTextEdit()
+        self.validation_prompt_edit.setFixedHeight(54)
+        settings.addRow("Validation prompt", self.validation_prompt_edit)
         self.base_model_edit = QLineEdit(train_lora.BASE_MODEL)
         self.base_model_edit.setCursorPosition(0)
-        settings_form.addRow("Base model", self.base_model_edit)
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItems(["5-step smoke test", "Full training"])
-        settings_form.addRow("Run mode", self.mode_combo)
+        settings.addRow("Base model", self.base_model_edit)
 
         steps_rank = QWidget()
         steps_rank_layout = QHBoxLayout(steps_rank)
@@ -233,13 +281,13 @@ class CloverTrainerWindow(QMainWindow):
         steps_rank_layout.addSpacing(8)
         steps_rank_layout.addWidget(QLabel("Rank"))
         steps_rank_layout.addWidget(self.rank_combo)
-        settings_form.addRow("Plan", steps_rank)
+        settings.addRow("Training size", steps_rank)
 
         self.learning_rate_spin = QDoubleSpinBox()
         self.learning_rate_spin.setDecimals(6)
         self.learning_rate_spin.setRange(0.000001, 1.0)
         self.learning_rate_spin.setSingleStep(0.00001)
-        settings_form.addRow("Learning rate", self.learning_rate_spin)
+        settings.addRow("Learning rate", self.learning_rate_spin)
 
         batch_row = QWidget()
         batch_layout = QHBoxLayout(batch_row)
@@ -253,201 +301,238 @@ class CloverTrainerWindow(QMainWindow):
         batch_layout.addSpacing(8)
         batch_layout.addWidget(QLabel("Accumulation"))
         batch_layout.addWidget(self.accumulation_spin)
-        settings_form.addRow("Batching", batch_row)
+        settings.addRow("Batching", batch_row)
 
         self.precision_combo = QComboBox()
         self.precision_combo.addItems(["fp16", "bf16", "no"])
-        settings_form.addRow("Mixed precision", self.precision_combo)
+        settings.addRow("Mixed precision", self.precision_combo)
         self.checkpoint_spin = QSpinBox()
         self.checkpoint_spin.setRange(1, 10000)
-        settings_form.addRow("Checkpoint interval", self.checkpoint_spin)
+        settings.addRow("Checkpoint interval", self.checkpoint_spin)
         self.seed_spin = QSpinBox()
         self.seed_spin.setRange(0, 2_147_483_647)
-        settings_form.addRow("Seed", self.seed_spin)
-        self.output_edit = QLineEdit()
-        settings_form.addRow("Output folder", self._path_row(self.output_edit, self._choose_output_folder))
+        settings.addRow("Seed", self.seed_spin)
         self.hub_edit = QLineEdit()
-        settings_form.addRow("Hugging Face repo", self.hub_edit)
-        self.push_checkbox = QCheckBox("Push the finished style after training")
-        settings_form.addRow("", self.push_checkbox)
-        layout.addWidget(settings_group)
-        layout.addStretch(1)
-        scroll.setWidget(container)
-        return scroll
+        settings.addRow("Hugging Face repo", self.hub_edit)
+        self.push_checkbox = QCheckBox("Push after training")
+        settings.addRow("", self.push_checkbox)
+        layout.addLayout(settings)
 
-    def _build_training_run_panel(self) -> QWidget:
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-
-        preview_group = QGroupBox("Dataset preview")
-        preview_layout = QVBoxLayout(preview_group)
-        self.preview_status = QLabel("Select Load dataset preview to inspect up to 12 pairs.")
-        self.preview_status.setWordWrap(True)
-        preview_layout.addWidget(self.preview_status)
-        self.dataset_gallery = self._image_list()
-        self.dataset_gallery.setMinimumHeight(200)
-        preview_layout.addWidget(self.dataset_gallery, 1)
-        layout.addWidget(preview_group, 2)
-
-        run_group = QGroupBox("3. Review and run")
-        run_layout = QVBoxLayout(run_group)
+        self.training_preview_button = QPushButton("Refresh command preview")
+        self.training_preview_button.clicked.connect(self._preview_training_command)
+        layout.addWidget(self.training_preview_button)
         self.training_command_box = QPlainTextEdit()
         self.training_command_box.setReadOnly(True)
-        self.training_command_box.setPlaceholderText("Preview the command before starting.")
-        self.training_command_box.setMaximumHeight(98)
-        run_layout.addWidget(self.training_command_box)
+        self.training_command_box.setMaximumHeight(74)
+        layout.addWidget(self.training_command_box)
 
-        buttons = QHBoxLayout()
-        self.training_preview_button = QPushButton("Preview command")
-        self.training_preview_button.clicked.connect(self._preview_training_command)
-        self.training_start_button = QPushButton("Start training")
-        self.training_start_button.clicked.connect(self._start_training)
-        self.training_stop_button = QPushButton("Stop")
-        self.training_stop_button.setEnabled(False)
-        self.training_stop_button.clicked.connect(self._stop_process)
-        buttons.addWidget(self.training_preview_button)
-        buttons.addWidget(self.training_start_button)
-        buttons.addWidget(self.training_stop_button)
-        run_layout.addLayout(buttons)
-
-        self.training_progress = QProgressBar()
-        self.training_progress.setRange(0, 100)
-        self.training_status = QLabel("Ready")
-        run_layout.addWidget(self.training_progress)
-        run_layout.addWidget(self.training_status)
-        layout.addWidget(run_group)
-
-        output_tabs = QTabWidget()
+        self.training_output_tabs = QTabWidget()
         self.training_log = QPlainTextEdit()
         self.training_log.setReadOnly(True)
         self.training_log.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.sample_gallery = self._image_list()
-        output_tabs.addTab(self.training_log, "Log")
-        output_tabs.addTab(self.sample_gallery, "Validation samples")
-        layout.addWidget(output_tabs, 2)
+        self.sample_gallery = self._image_list(116)
+        self.training_output_tabs.addTab(self.training_log, "Log")
+        self.training_output_tabs.addTab(self.sample_gallery, "Samples")
+        self.training_output_tabs.setMinimumHeight(180)
+        layout.addWidget(self.training_output_tabs)
         return panel
 
-    def _build_coreml_tab(self) -> QWidget:
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(10, 12, 10, 10)
+    def _build_coreml_tab(self) -> QScrollArea:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
 
-        top_splitter = QSplitter(Qt.Horizontal)
-        top_splitter.addWidget(self._build_coreml_input_panel())
-        top_splitter.addWidget(self._build_coreml_check_panel())
-        top_splitter.setSizes([580, 580])
-        layout.addWidget(top_splitter, 2)
+        layout.addWidget(self._heading("Prepare a style for iPhone"))
+        intro = QLabel(
+            "Choose the Clover model, one style file, and where to save the Core ML output."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
 
-        run_group = QGroupBox("3. Run selected Core ML step")
-        run_layout = QVBoxLayout(run_group)
-        self.coreml_command_box = QPlainTextEdit()
-        self.coreml_command_box.setReadOnly(True)
-        self.coreml_command_box.setMaximumHeight(88)
-        self.coreml_command_box.setPlaceholderText("Preview the command before starting.")
-        run_layout.addWidget(self.coreml_command_box)
+        form = QFormLayout()
+        form.setVerticalSpacing(10)
+        self.model_dir_edit = QLineEdit("/path/to/Clover-Image-Tiny")
+        self.model_dir_edit.setCursorPosition(0)
+        form.addRow(
+            "Clover model",
+            self._path_row(self.model_dir_edit, self._choose_model_folder, "Choose folder…"),
+        )
+        self.style_file_edit = QLineEdit(
+            "outputs/monet-lora/pytorch_lora_weights.safetensors"
+        )
+        self.style_file_edit.setCursorPosition(0)
+        form.addRow(
+            "Style file",
+            self._path_row(self.style_file_edit, self._choose_style_file, "Choose file…"),
+        )
+        self.coreml_output_edit = QLineEdit("coreml-models/clover-stateful")
+        self.coreml_output_edit.setCursorPosition(0)
+        form.addRow(
+            "Save Core ML to",
+            self._path_row(
+                self.coreml_output_edit,
+                self._choose_coreml_output,
+                "Choose folder…",
+            ),
+        )
+        layout.addLayout(form)
 
         buttons = QHBoxLayout()
-        self.coreml_preview_button = QPushButton("Preview command")
-        self.coreml_preview_button.clicked.connect(self._preview_coreml_command)
-        self.coreml_start_button = QPushButton("Run selected step")
+        self.coreml_start_button = QPushButton("Export for iPhone")
         self.coreml_start_button.clicked.connect(self._start_coreml)
         self.coreml_stop_button = QPushButton("Stop")
         self.coreml_stop_button.setEnabled(False)
         self.coreml_stop_button.clicked.connect(self._stop_process)
-        buttons.addWidget(self.coreml_preview_button)
-        buttons.addWidget(self.coreml_start_button)
+        buttons.addStretch(1)
         buttons.addWidget(self.coreml_stop_button)
-        run_layout.addLayout(buttons)
+        buttons.addWidget(self.coreml_start_button)
+        layout.addLayout(buttons)
 
         self.coreml_progress = QProgressBar()
-        self.coreml_status = QLabel("Ready")
-        run_layout.addWidget(self.coreml_progress)
-        run_layout.addWidget(self.coreml_status)
-        layout.addWidget(run_group)
+        self.coreml_progress.setRange(0, 100)
+        self.coreml_progress.setValue(0)
+        self.coreml_status = QLabel("Choose the three paths, then export.")
+        self.coreml_status.setWordWrap(True)
+        layout.addWidget(self.coreml_progress)
+        layout.addWidget(self.coreml_status)
 
-        log_group = QGroupBox("Conversion log")
-        log_layout = QVBoxLayout(log_group)
-        self.coreml_log = QPlainTextEdit()
-        self.coreml_log.setReadOnly(True)
-        self.coreml_log.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        log_layout.addWidget(self.coreml_log)
-        layout.addWidget(log_group, 2)
-        return tab
+        self.coreml_details_button = self._details_button("technical details")
+        self.coreml_details_button.toggled.connect(self._toggle_coreml_details)
+        layout.addWidget(self.coreml_details_button)
 
-    def _build_coreml_input_panel(self) -> QWidget:
-        group = QGroupBox("1. Inputs and workflow")
-        form = QFormLayout(group)
-        self.model_dir_edit = QLineEdit("/path/to/Clover-Image-Tiny")
-        self.model_dir_edit.setCursorPosition(0)
-        form.addRow("Clover model folder", self._path_row(self.model_dir_edit, self._choose_model_folder))
-        self.style_file_edit = QLineEdit("outputs/monet-lora/pytorch_lora_weights.safetensors")
-        self.style_file_edit.setCursorPosition(0)
-        form.addRow("Style .safetensors", self._path_row(self.style_file_edit, self._choose_style_file))
-        self.coreml_output_edit = QLineEdit("coreml-models/clover-stateful")
-        self.coreml_output_edit.setCursorPosition(0)
-        form.addRow("Core ML output", self._path_row(self.coreml_output_edit, self._choose_coreml_output))
+        self.coreml_advanced = self._build_coreml_advanced()
+        self.coreml_advanced.hide()
+        layout.addWidget(self.coreml_advanced)
+        layout.addStretch(1)
+        return self._scroll_page(page)
+
+    def _build_coreml_advanced(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 2, 0, 0)
+        layout.setSpacing(10)
+
+        settings = QFormLayout()
         self.coreml_action_combo = QComboBox()
         self.coreml_action_combo.addItems(core.COREML_ACTIONS)
-        self.coreml_action_combo.currentTextChanged.connect(self._coreml_action_changed)
-        form.addRow("Workflow step", self.coreml_action_combo)
+        settings.addRow("Task", self.coreml_action_combo)
         self.psnr_spin = QDoubleSpinBox()
         self.psnr_spin.setRange(1, 100)
         self.psnr_spin.setDecimals(1)
         self.psnr_spin.setValue(35.0)
-        form.addRow("Minimum PSNR", self.psnr_spin)
-        note = QLabel(
-            "Run the steps in order: export the stateful U-Net, compile it for Xcode, "
-            "then validate base and style parity."
-        )
-        note.setWordWrap(True)
-        form.addRow("", note)
-        return group
+        settings.addRow("Minimum PSNR", self.psnr_spin)
+        layout.addLayout(settings)
 
-    def _build_coreml_check_panel(self) -> QWidget:
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        requirements_group = QGroupBox("2. Requirements")
-        requirements_layout = QVBoxLayout(requirements_group)
+        self.check_requirements_button = QPushButton("Refresh checks")
+        self.check_requirements_button.clicked.connect(self._check_coreml_requirements)
+        layout.addWidget(self.check_requirements_button)
         self.requirements_tree = QTreeWidget()
         self.requirements_tree.setHeaderLabels(["Requirement", "Status", "Details"])
         self.requirements_tree.setRootIsDecorated(False)
         self.requirements_tree.setAlternatingRowColors(True)
-        self.requirements_tree.header().setStretchLastSection(True)
-        requirements_layout.addWidget(self.requirements_tree)
-        self.check_requirements_button = QPushButton("Check requirements")
-        self.check_requirements_button.clicked.connect(self._check_coreml_requirements)
-        requirements_layout.addWidget(self.check_requirements_button)
-        layout.addWidget(requirements_group, 2)
+        self.requirements_tree.setMinimumHeight(150)
+        layout.addWidget(self.requirements_tree)
 
-        artifacts_group = QGroupBox("Output artifacts")
-        artifacts_layout = QVBoxLayout(artifacts_group)
+        self.coreml_preview_button = QPushButton("Refresh command preview")
+        self.coreml_preview_button.clicked.connect(self._preview_coreml_command)
+        layout.addWidget(self.coreml_preview_button)
+        self.coreml_command_box = QPlainTextEdit()
+        self.coreml_command_box.setReadOnly(True)
+        self.coreml_command_box.setMaximumHeight(74)
+        layout.addWidget(self.coreml_command_box)
+
+        self.coreml_log = QPlainTextEdit()
+        self.coreml_log.setReadOnly(True)
+        self.coreml_log.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.coreml_log.setMinimumHeight(150)
+        layout.addWidget(self.coreml_log)
+
         self.artifacts_tree = QTreeWidget()
-        self.artifacts_tree.setHeaderLabels(["Artifact", "Type or size", "Path"])
+        self.artifacts_tree.setHeaderLabels(["Output", "Type or size", "Path"])
         self.artifacts_tree.setRootIsDecorated(False)
-        self.artifacts_tree.header().setStretchLastSection(True)
-        artifacts_layout.addWidget(self.artifacts_tree)
-        self.refresh_artifacts_button = QPushButton("Refresh artifacts")
+        self.artifacts_tree.setMinimumHeight(110)
+        layout.addWidget(self.artifacts_tree)
+        self.refresh_artifacts_button = QPushButton("Refresh outputs")
         self.refresh_artifacts_button.clicked.connect(self._refresh_artifacts)
-        artifacts_layout.addWidget(self.refresh_artifacts_button)
-        layout.addWidget(artifacts_group, 1)
+        layout.addWidget(self.refresh_artifacts_button)
+
+        self.coreml_action_combo.currentTextChanged.connect(
+            self._coreml_action_changed
+        )
         return panel
 
     @staticmethod
-    def _path_row(edit: QLineEdit, callback: Callable[[], None]) -> QWidget:
+    def _scroll_page(page: QWidget) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(page)
+        return scroll
+
+    @staticmethod
+    def _heading(text: str) -> QLabel:
+        label = QLabel(text)
+        font = label.font()
+        font.setPointSize(font.pointSize() + 2)
+        font.setBold(True)
+        label.setFont(font)
+        return label
+
+    @staticmethod
+    def _details_button(label: str) -> QToolButton:
+        button = QToolButton()
+        button.setText(f"Show {label}")
+        button.setCheckable(True)
+        button.setArrowType(Qt.ArrowType.RightArrow)
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        return button
+
+    @staticmethod
+    def _toggle_details(
+        button: QToolButton,
+        panel: QWidget,
+        shown: bool,
+        label: str,
+    ) -> None:
+        panel.setVisible(shown)
+        button.setArrowType(
+            Qt.ArrowType.DownArrow if shown else Qt.ArrowType.RightArrow
+        )
+        button.setText(f"Hide {label}" if shown else f"Show {label}")
+
+    def _toggle_coreml_details(self, shown: bool) -> None:
+        self._toggle_details(
+            self.coreml_details_button,
+            self.coreml_advanced,
+            shown,
+            "technical details",
+        )
+        if shown:
+            self._preview_coreml_command()
+            self._check_coreml_requirements()
+            self._refresh_artifacts()
+
+    @staticmethod
+    def _path_row(
+        edit: QLineEdit,
+        callback: Callable[[], None],
+        button_title: str,
+    ) -> QWidget:
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
-        button = QPushButton("Choose…")
+        button = QPushButton(button_title)
         button.clicked.connect(callback)
         layout.addWidget(edit, 1)
         layout.addWidget(button)
         return row
 
     @staticmethod
-    def _image_list() -> QListWidget:
+    def _image_list(icon_size: int) -> QListWidget:
         widget = QListWidget()
         widget.setViewMode(QListWidget.ViewMode.IconMode)
-        widget.setIconSize(QSize(140, 140))
+        widget.setIconSize(QSize(icon_size, icon_size))
         widget.setResizeMode(QListWidget.ResizeMode.Adjust)
         widget.setMovement(QListWidget.Movement.Static)
         widget.setSpacing(8)
@@ -459,7 +544,7 @@ class CloverTrainerWindow(QMainWindow):
             self,
             "About Clover Trainer",
             "Clover Image Tiny LoRA Trainer\n\n"
-            "Native Python desktop controls for Diffusers LoRA training and Core ML export.\n"
+            "A native Python desktop app for training styles and exporting Core ML.\n"
             "Code: Apache-2.0\nModel derivatives: CreativeML Open RAIL-M",
         )
 
@@ -474,21 +559,21 @@ class CloverTrainerWindow(QMainWindow):
         self.tabs.setFocus()
 
     def _choose_dataset_folder(self) -> None:
-        self._choose_directory(self.dataset_edit, "Choose local imagefolder dataset")
+        self._choose_directory(self.dataset_edit, "Choose training images")
 
     def _choose_output_folder(self) -> None:
-        self._choose_directory(self.output_edit, "Choose training output folder")
+        self._choose_directory(self.output_edit, "Choose where to save the style")
 
     def _choose_model_folder(self) -> None:
-        self._choose_directory(self.model_dir_edit, "Choose Clover model folder")
+        self._choose_directory(self.model_dir_edit, "Choose Clover model")
 
     def _choose_coreml_output(self) -> None:
-        self._choose_directory(self.coreml_output_edit, "Choose Core ML output folder")
+        self._choose_directory(self.coreml_output_edit, "Choose Core ML output")
 
     def _choose_style_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Choose Clover style weights",
+            "Choose a Clover style",
             str(core.ROOT),
             "SafeTensors files (*.safetensors)",
         )
@@ -530,6 +615,7 @@ class CloverTrainerWindow(QMainWindow):
             self.hub_edit,
         ):
             edit.setCursorPosition(0)
+        self._preview_training_command()
 
     def _training_values(self) -> dict[str, Any]:
         return {
@@ -549,11 +635,21 @@ class CloverTrainerWindow(QMainWindow):
             "hub_model_id": self.hub_edit.text(),
         }
 
+    def _training_mode(self) -> str:
+        return str(self.mode_combo.currentData())
+
     def _load_dataset_preview(self) -> None:
         if self.preview_thread is not None and self.preview_thread.isRunning():
             return
+        if not self.dataset_edit.text().strip():
+            QMessageBox.information(
+                self,
+                "Choose training images",
+                "Choose a local image folder or enter a Hugging Face dataset first.",
+            )
+            return
         self.load_preview_button.setEnabled(False)
-        self.preview_status.setText("Loading dataset preview…")
+        self.preview_status.setText("Loading images…")
         self.preview_thread = DatasetPreviewThread(self.dataset_edit.text())
         self.preview_thread.preview_ready.connect(self._dataset_preview_ready)
         self.preview_thread.preview_failed.connect(self._dataset_preview_failed)
@@ -562,10 +658,10 @@ class CloverTrainerWindow(QMainWindow):
 
     def _dataset_preview_ready(self, status: str, samples: object) -> None:
         self.preview_status.setText(status)
-        self._populate_images(self.dataset_gallery, list(samples))
+        self._populate_images(self.dataset_gallery, list(samples), 116)
 
     def _dataset_preview_failed(self, error: str) -> None:
-        self.preview_status.setText(f"Dataset preview failed: {error}")
+        self.preview_status.setText(f"Could not load images: {error}")
         self.dataset_gallery.clear()
 
     def _dataset_preview_finished(self) -> None:
@@ -574,19 +670,24 @@ class CloverTrainerWindow(QMainWindow):
             self.preview_thread.deleteLater()
         self.preview_thread = None
 
-    def _populate_images(self, widget: QListWidget, samples: list[tuple[Any, str]]) -> None:
+    def _populate_images(
+        self,
+        widget: QListWidget,
+        samples: list[tuple[Any, str]],
+        icon_size: int,
+    ) -> None:
         widget.clear()
         for source, caption in samples:
-            pixmap = self._pixmap(source)
-            item = QListWidgetItem(caption[:54] + ("…" if len(caption) > 54 else ""))
+            pixmap = self._pixmap(source, icon_size)
+            item = QListWidgetItem(caption[:42] + ("…" if len(caption) > 42 else ""))
             item.setToolTip(caption)
             if pixmap is not None and not pixmap.isNull():
                 item.setIcon(QIcon(pixmap))
-            item.setSizeHint(QSize(168, 184))
+            item.setSizeHint(QSize(icon_size + 28, icon_size + 34))
             widget.addItem(item)
 
     @staticmethod
-    def _pixmap(source: Any) -> QPixmap | None:
+    def _pixmap(source: Any, icon_size: int) -> QPixmap | None:
         if isinstance(source, Path):
             pixmap = QPixmap(str(source))
         else:
@@ -597,9 +698,9 @@ class CloverTrainerWindow(QMainWindow):
             except Exception:  # noqa: BLE001 - thumbnails are optional
                 return None
         return pixmap.scaled(
-            QSize(140, 140),
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
+            QSize(icon_size, icon_size),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
         )
 
     def _preview_training_command(self) -> None:
@@ -607,29 +708,37 @@ class CloverTrainerWindow(QMainWindow):
             command = core.training_preview(
                 self._training_values(),
                 self.base_model_edit.text(),
-                self.mode_combo.currentText(),
+                self._training_mode(),
                 self.push_checkbox.isChecked(),
             )
             self.training_command_box.setPlainText(command)
-            self.training_status.setText("Command ready")
-        except Exception as error:  # noqa: BLE001
-            self.training_status.setText(f"Could not build command: {error}")
+        except Exception as error:  # noqa: BLE001 - keep main flow usable
+            self.training_command_box.setPlainText(f"Could not build command: {error}")
 
     def _start_training(self) -> None:
         if self.process_thread is not None:
             return
+        if not self.dataset_edit.text().strip():
+            QMessageBox.information(
+                self,
+                "Choose training images",
+                "Choose a local image folder or enter a Hugging Face dataset first.",
+            )
+            return
+        self.training_status.setText("Preparing the trainer…")
+        QApplication.processEvents()
         try:
-            values = self._training_values()
-            config = core.make_config(values)
+            config = core.make_config(self._training_values())
             command = core.training_command(
                 config,
                 self.base_model_edit.text(),
-                self.mode_combo.currentText(),
+                self._training_mode(),
                 self.push_checkbox.isChecked(),
                 fetch=True,
             )
             self.training_command_box.setPlainText(core.display_command(command))
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:  # noqa: BLE001 - show startup errors
+            self.training_status.setText("Could not start training.")
             QMessageBox.warning(self, "Could not start training", str(error))
             return
         self._start_process(
@@ -640,9 +749,16 @@ class CloverTrainerWindow(QMainWindow):
             status=self.training_status,
         )
 
-    def _coreml_action_changed(self, _action: str = "") -> None:
+    def _coreml_action_changed(self, action: str) -> None:
+        labels = {
+            core.COREML_ACTIONS[0]: "Export for iPhone",
+            core.COREML_ACTIONS[1]: "Compile for Xcode",
+            core.COREML_ACTIONS[2]: "Validate model",
+        }
+        self.coreml_start_button.setText(labels.get(action, "Run"))
         self._preview_coreml_command()
-        self._check_coreml_requirements()
+        if self.coreml_advanced.isVisible():
+            self._check_coreml_requirements()
 
     def _coreml_requirements(self) -> list[core.Requirement]:
         return core.coreml_requirements(
@@ -662,9 +778,9 @@ class CloverTrainerWindow(QMainWindow):
             )
         self.requirements_tree.resizeColumnToContents(0)
         self.requirements_tree.resizeColumnToContents(1)
-        missing = sum(requirement.status == "Missing" for requirement in requirements)
+        missing = sum(item.status == "Missing" for item in requirements)
         self.coreml_status.setText(
-            "Ready for this step" if missing == 0 else f"{missing} requirement(s) need attention"
+            "Ready to run." if missing == 0 else f"{missing} item(s) still need attention."
         )
 
     def _preview_coreml_command(self) -> None:
@@ -677,7 +793,7 @@ class CloverTrainerWindow(QMainWindow):
                 self.psnr_spin.value(),
             )
             self.coreml_command_box.setPlainText(command)
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:  # noqa: BLE001 - keep main flow usable
             self.coreml_command_box.setPlainText(f"Could not build command: {error}")
 
     def _start_coreml(self) -> None:
@@ -689,8 +805,8 @@ class CloverTrainerWindow(QMainWindow):
         if missing:
             QMessageBox.warning(
                 self,
-                "Core ML requirements are missing",
-                "Resolve these requirements before running:\n\n" + "\n".join(missing),
+                "Core ML setup is incomplete",
+                "Choose or install these items first:\n\n" + "\n".join(missing),
             )
             return
         command = core.coreml_command(
@@ -721,7 +837,7 @@ class CloverTrainerWindow(QMainWindow):
         log.clear()
         log.appendPlainText("$ " + shlex.join(command))
         progress.setValue(0)
-        status.setText("Running")
+        status.setText("Running…")
         self.active_log = log
         self.active_progress = progress
         self.active_status = status
@@ -733,23 +849,29 @@ class CloverTrainerWindow(QMainWindow):
         self.process_thread.progress_changed.connect(progress.setValue)
         self.process_thread.process_completed.connect(self._process_completed)
         self.process_thread.start()
-        self.statusBar().showMessage("Training is running" if workflow == "training" else "Core ML task is running")
+        self.statusBar().showMessage(
+            "Training is running" if workflow == "training" else "Core ML export is running"
+        )
 
     def _stop_process(self) -> None:
         if self.process_thread is None:
             return
         self.process_thread.stop()
         if self.active_status is not None:
-            self.active_status.setText("Stop requested")
+            self.active_status.setText("Stopping…")
 
     def _process_completed(self, code: int) -> None:
         if self.active_status is not None:
-            self.active_status.setText("Complete" if code == 0 else f"Stopped with exit code {code}")
+            self.active_status.setText(
+                "Complete." if code == 0 else f"Stopped with exit code {code}."
+            )
         if code == 0 and self.active_progress is not None:
             self.active_progress.setValue(100)
         if self.active_workflow == "training":
-            samples = [(path, path.name) for path in core.sample_images(self.output_edit.text())]
-            self._populate_images(self.sample_gallery, samples)
+            samples = [
+                (path, path.name) for path in core.sample_images(self.output_edit.text())
+            ]
+            self._populate_images(self.sample_gallery, samples, 116)
         else:
             self._refresh_artifacts()
         self._set_process_buttons(running=False)
@@ -765,8 +887,12 @@ class CloverTrainerWindow(QMainWindow):
     def _set_process_buttons(self, *, running: bool) -> None:
         self.training_start_button.setEnabled(not running)
         self.coreml_start_button.setEnabled(not running)
-        self.training_stop_button.setEnabled(running)
-        self.coreml_stop_button.setEnabled(running)
+        self.training_stop_button.setEnabled(
+            running and self.active_workflow == "training"
+        )
+        self.coreml_stop_button.setEnabled(
+            running and self.active_workflow == "coreml"
+        )
 
     def _refresh_artifacts(self) -> None:
         self.artifacts_tree.clear()
@@ -783,7 +909,7 @@ class CloverTrainerWindow(QMainWindow):
             answer = QMessageBox.question(
                 self,
                 "A process is still running",
-                "Stop the active process and close the application?",
+                "Stop it and close the application?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -806,7 +932,7 @@ def main() -> None:
     args = parser.parse_args()
 
     app = QApplication(sys.argv[:1])
-    app.setApplicationName("Clover Image Tiny LoRA Trainer")
+    app.setApplicationName("Clover LoRA Trainer")
     window = CloverTrainerWindow(selected_tab=args.tab, demo=args.demo)
     window.show()
     window.raise_()
